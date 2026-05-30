@@ -1,0 +1,38 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TurnTelemetry",
+  "description": "Payload for POST /telemetry/session — written by the harness after each LLM turn. See ARCHITECTURE_V5.md §2.5.",
+  "type": "object",
+  "required": [
+    "session_id",
+    "turn_id",
+    "project_id",
+    "provider",
+    "actual_input_tokens",
+    "tokens_estimated",
+    "block_hash",
+    "injected"
+  ],
+  "properties": {
+    "session_id":               { "type": "string" },
+    "turn_id":                  { "type": "integer", "minimum": 1 },
+    "project_id":               { "type": "string" },
+    "user_id":                  { "type": "string", "default": "local" },
+    "provider":                 { "type": "string", "enum": ["openai", "anthropic", "ollama", "vscode_extension"] },
+    "model":                    { "type": ["string", "null"] },
+    "actual_input_tokens":      { "type": "integer" },
+    "actual_output_tokens":     { "type": ["integer", "null"] },
+    "baseline_full_repo":       { "type": ["integer", "null"] },
+    "baseline_naive_rag":       { "type": ["integer", "null"] },
+    "baseline_no_context":      { "type": ["integer", "null"] },
+    "tokens_estimated":         { "type": "boolean" },
+    "block_hash":               { "type": ["string", "null"] },
+    "injected":                 { "type": "boolean" },
+    "incomplete":               { "type": "boolean", "default": false },
+    "latency_ms_total":         { "type": ["integer", "null"] },
+    "latency_ms_ttft":          { "type": ["integer", "null"] },
+    "cache_eligible":           { "type": "boolean", "default": false },
+    "cache_hit_estimated":      { "type": "boolean", "default": false }
+  },
+  "additionalProperties": false
+}
