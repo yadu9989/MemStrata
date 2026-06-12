@@ -1,0 +1,22 @@
+# Environment — never commit live secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+# V5.2-D — python.org-based Nuitka build env (see dist/BUILD_NOTES.md).
+build_env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+*.swp
