@@ -7,13 +7,14 @@ function $(id: string): HTMLElement {
   return el;
 }
 
-const badge     = $('status-badge');
-const apiKeyEl  = $('api-key') as HTMLInputElement;
-const saveKeyBtn = $('save-key-btn');
-const projectEl = $('project-id') as HTMLInputElement;
+const badge          = $('status-badge');
+const apiKeyEl       = $('api-key') as HTMLInputElement;
+const saveKeyBtn     = $('save-key-btn');
+const projectEl      = $('project-id') as HTMLInputElement;
 const saveProjectBtn = $('save-project-btn');
-const savingsBlock  = $('savings-block');
-const savingsAmount = $('savings-amount');
+const savingsBlock   = $('savings-block');
+const savingsAmount  = $('savings-amount');
+const popupAugMode   = $('popup-aug-mode') as HTMLSelectElement;
 
 function setStatus(connected: boolean): void {
   badge.textContent = connected ? 'online' : 'offline';
@@ -27,7 +28,7 @@ async function init(): Promise<void> {
   });
 
   // Populate saved values.
-  chrome.storage.local.get(['apiKey', 'projectId', 'monthlySavingsUsd'], result => {
+  chrome.storage.local.get(['apiKey', 'projectId', 'monthlySavingsUsd', 'augmentationMode'], result => {
     if (result['apiKey']) {
       apiKeyEl.value = '•'.repeat(20);
       apiKeyEl.dataset['saved'] = 'true';
@@ -40,6 +41,11 @@ async function init(): Promise<void> {
       savingsAmount.textContent = `$${usd.toFixed(2)}`;
       savingsBlock.style.display = '';
     }
+    popupAugMode.value = (result['augmentationMode'] as string) ?? 'append';
+  });
+
+  popupAugMode.addEventListener('change', () => {
+    chrome.storage.local.set({ augmentationMode: popupAugMode.value });
   });
 
   saveKeyBtn.addEventListener('click', () => {

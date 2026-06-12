@@ -10,6 +10,7 @@ DO NOT skip the 7-day window for 'convenience' — the baseline IS the math.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -45,7 +46,14 @@ def _now_utc() -> datetime:
 
 
 def is_in_baseline_window(project_id: str, conn: sqlite3.Connection) -> bool:
-    """Return True when the project is in its baseline window (injection disabled)."""
+    """Return True when the project is in its baseline window (injection disabled).
+
+    ML_DEV_BYPASS_BASELINE=true skips the window entirely so local testing
+    gets immediate injection without touching production records.
+    """
+    if os.environ.get("ML_DEV_BYPASS_BASELINE", "").lower() == "true":
+        return False
+
     ensure_table(conn)
     row = conn.execute(
         "SELECT baseline_started, baseline_ended, last_recomputed FROM cohort_baseline WHERE project_id = ?",
@@ -78,6 +86,9 @@ def is_in_baseline_window(project_id: str, conn: sqlite3.Connection) -> bool:
 
 def days_remaining(project_id: str, conn: sqlite3.Connection) -> Optional[int]:
     """Days left in the current baseline window, or None if not in baseline."""
+    if os.environ.get("ML_DEV_BYPASS_BASELINE", "").lower() == "true":
+        return None
+
     ensure_table(conn)
     row = conn.execute(
         "SELECT baseline_started, baseline_ended FROM cohort_baseline WHERE project_id = ?",

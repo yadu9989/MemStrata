@@ -20,3 +20,24 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+
+# Node / JS package managers
+node_modules/
+
+# Generated build artifacts (TS → JS). The source-of-truth is the
+# corresponding *.ts files in extension/src/ and browser-extension/src/.
+extension/out/
+*.tsbuildinfo
+
+# Compiled / packaged extension bundles. Rebuilt by `npm run package`.
+*.vsix
+
+# Strategy drafts maintained in MS Word; kept on disk for reference, not
+# in git history.
+*.docx
+
+# Local-only sandbox state — Claude Code scheduler, ad-hoc SQLite DBs,
+# Nuitka crash dumps from failed builds.
+.claude/
+nuitka-crash-report.xml
+memory_layer.db

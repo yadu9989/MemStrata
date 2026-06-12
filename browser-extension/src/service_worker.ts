@@ -156,5 +156,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // async
   }
 
+  // Phase 35 (SSE Interceptor): inject fetch_interceptor.js into the page's
+  // MAIN world.  Content scripts cannot call chrome.scripting directly, so
+  // they message the service worker which has the scripting permission.
+  // Idempotency is handled on the content-script side (StreamInterceptorBridge
+  // only sends this message once per init cycle).
+  if (msg.type === 'INJECT_FETCH_INTERCEPTOR') {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      const tabId = tabs[0]?.id;
+      if (tabId === undefined) { sendResponse({ ok: false, error: 'no_tab' }); return; }
+      chrome.scripting.executeScript(
+        {
+          target: { tabId },
+          files: ['interceptor/fetch_interceptor.js'],
+          world: 'MAIN',
+        },
+        () => {
+          const err = chrome.runtime.lastError;
+          sendResponse(err ? { ok: false, error: err.message } : { ok: true });
+        },
+      );
+    });
+    return true; // async
+  }
+
   return false;
 });

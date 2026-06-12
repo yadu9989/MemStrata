@@ -77,17 +77,42 @@ def _parse_openrouter_models(data: list[dict]) -> list[dict]:
         if input_per_m is None or output_per_m is None:
             continue  # can't compute savings without at least these two
 
+        # OpenRouter's pricing schema uses 'input_cache_read' and
+        # 'input_cache_write' for KV-cache rates (verified June 2026 on
+        # anthropic/* and nvidia/* models). Earlier code read 'cache_read'
+        # and 'image_generation' which never matched — every cache column
+        # in provider_pricing came back NULL, which silently disabled all
+        # cache-savings calculations downstream.
         rows.append({
             "provider":         provider,
             "model":            model_name,
             "input_per_m":      input_per_m,
             "output_per_m":     output_per_m,
-            "cache_write_per_m": _to_per_m(pricing.get("image_generation")),  # n/a, keep None
-            "cache_read_per_m":  _to_per_m(pricing.get("cache_read")),
+            "cache_read_per_m":  _to_per_m(pricing.get("input_cache_read")),
+            "cache_write_per_m": _to_per_m(pricing.get("input_cache_write")),
             "fetched_at":        now,
         })
 
     return rows
+
+
+def _build_httpx_client(timeout: float = 15.0) -> httpx.Client:
+    """Return an httpx.Client that can verify TLS on Windows.
+
+    httpx defaults to certifi's bundled CA bundle, which doesn't include the
+    enterprise / corporate CAs that Windows installs into the system trust
+    store. On affected machines that turns OpenRouter sync into a permanent
+    CERTIFICATE_VERIFY_FAILED loop. We prefer `truststore` (PEP 543) which
+    reads the OS trust store directly; if it's unavailable we fall back to
+    certifi (default behavior).
+    """
+    try:
+        import ssl
+        import truststore  # type: ignore[import]
+        ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        return httpx.Client(timeout=timeout, verify=ctx)
+    except ImportError:
+        return httpx.Client(timeout=timeout)
 
 
 def sync_from_openrouter_sync(conn: sqlite3.Connection) -> int:
@@ -96,7 +121,7 @@ def sync_from_openrouter_sync(conn: sqlite3.Connection) -> int:
     Returns the number of rows upserted.  Raises on HTTP or parse errors so
     the caller can log and fall back gracefully.
     """
-    with httpx.Client(timeout=15.0) as client:
+    with _build_httpx_client(timeout=15.0) as client:
         resp = client.get(_OPENROUTER_URL)
     resp.raise_for_status()
 

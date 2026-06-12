@@ -13,6 +13,7 @@
 //   button click. No auto-augmentation, no silent mutation.
 
 import type { ContextBlock, BaselineStatus } from './memory_layer_client.js';
+import { recordRewriteTelemetry } from './memory_layer_client.js';
 import { RewriteEngine } from './RewriteEngine.js';
 import { DiffView } from './DiffView.js';
 
@@ -139,6 +140,43 @@ function writeText(el: PromptElement, value: string): void {
   }
 }
 
+// ─── Submit-button guard (Hard Rule 67) ──────────────────────────────────────
+
+/**
+ * Find the AI provider's submit button and disable it for the duration of the
+ * diff review. Returns a restore function. This prevents keyboard shortcuts
+ * from accidentally submitting the un-reviewed prompt while the diff modal
+ * is open. (The visual overlay already blocks mouse clicks.)
+ *
+ * Fails open: if no selector matches or DOM access throws, returns a no-op
+ * so the caller can proceed without crashing the augment flow.
+ */
+function lockSubmitButton(): () => void {
+  try {
+    const SELECTORS = [
+      'button[data-testid="send-button"]',
+      'button[aria-label*="Send" i]',
+      'button[aria-label*="send" i]',
+      '[data-testid="fruitjuice-send-button"]',
+      'form button[type="submit"]',
+      'button.send-button',
+    ];
+    let locked: HTMLButtonElement | null = null;
+    for (const sel of SELECTORS) {
+      const btn = document.querySelector<HTMLButtonElement>(sel);
+      if (btn && !btn.disabled) {
+        btn.disabled = true;
+        locked = btn;
+        break;
+      }
+    }
+    return (): void => { if (locked) locked.disabled = false; };
+  } catch {
+    // DOM not accessible or selector threw — fail open with a no-op unlock
+    return (): void => {};
+  }
+}
+
 // ─── Shadow-DOM floating button + banner ──────────────────────────────────────
 
 const SHADOW_HOST_ID = 'memory-layer-augmenter-root';
@@ -149,6 +187,7 @@ const BUTTON_STYLES = `
     position: fixed;
     z-index: 2147483647;
     pointer-events: none;
+    user-select: none;
   }
   #ml-btn {
     pointer-events: all;
@@ -161,12 +200,13 @@ const BUTTON_STYLES = `
     background: #1f2937;
     color: #f9fafb;
     font: 500 13px/1.4 system-ui, sans-serif;
-    cursor: pointer;
+    cursor: grab;
     transition: background 120ms ease, border-color 120ms ease;
     white-space: nowrap;
+    touch-action: none;
   }
   #ml-btn:hover { background: #374151; border-color: #9ca3af; }
-  #ml-btn:active { background: #111827; }
+  #ml-btn:active { background: #111827; cursor: grabbing; }
   #ml-banner {
     pointer-events: all;
     margin-top: 6px;
@@ -203,7 +243,13 @@ const BUTTON_STYLES = `
   #ml-baseline-msg.visible { display: block; }
 `;
 
+// Storage key for persisted drag position
+const DRAG_POS_KEY = 'ml_btn_pos';
+
 export class AugmenterUI {
+  externalSessionId: string | null = null;
+  providerId: string | null = null;
+
   private host: HTMLElement;
   private shadow: ShadowRoot;
   private wrap: HTMLElement;
@@ -212,6 +258,17 @@ export class AugmenterUI {
   private baselineMsg: HTMLElement;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private originalText = '';
+
+  // Drag state
+  private _isDragging = false;
+  private _dragStartX = 0;
+  private _dragStartY = 0;
+  private _wrapStartLeft = 0;
+  private _wrapStartBottom = 0;
+  private _hasDragged = false;
+  private _suppressNextClick = false;
+  // Whether position has been locked by a drag (overrides repositionNear)
+  private _positionLocked = false;
 
   constructor() {
     this.host = document.createElement('div');
@@ -244,13 +301,102 @@ export class AugmenterUI {
     this.shadow.appendChild(this.wrap);
 
     document.body.appendChild(this.host);
+
+    // Restore persisted drag position (if any)
+    this._loadPersistedPosition();
+
+    // Drag: pointerdown on the button starts a drag
+    this.btn.addEventListener('pointerdown', (e: PointerEvent) => {
+      if (e.button !== 0) return; // left button only
+      this._isDragging = true;
+      this._hasDragged = false;
+      this._dragStartX = e.clientX;
+      this._dragStartY = e.clientY;
+      this._wrapStartLeft = parseInt(this.wrap.style.left || '0', 10);
+      this._wrapStartBottom = parseInt(this.wrap.style.bottom || '0', 10);
+      this.btn.setPointerCapture(e.pointerId);
+      this.btn.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+
+    this.btn.addEventListener('pointermove', (e: PointerEvent) => {
+      if (!this._isDragging) return;
+      const dx = e.clientX - this._dragStartX;
+      const dy = e.clientY - this._dragStartY;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) {
+        this._hasDragged = true;
+      }
+      if (this._hasDragged) {
+        const newLeft   = Math.max(0, Math.min(window.innerWidth  - 20, this._wrapStartLeft   + dx));
+        const newBottom = Math.max(0, Math.min(window.innerHeight - 20, this._wrapStartBottom - dy));
+        this.wrap.style.left   = `${newLeft}px`;
+        this.wrap.style.bottom = `${newBottom}px`;
+      }
+    });
+
+    this.btn.addEventListener('pointerup', (e: PointerEvent) => {
+      if (!this._isDragging) return;
+      this._isDragging = false;
+      this.btn.style.cursor = '';
+      if (this._hasDragged) {
+        this._positionLocked = true;
+        this._suppressNextClick = true;
+        this._savePosition(
+          parseInt(this.wrap.style.left   || '0', 10),
+          parseInt(this.wrap.style.bottom || '0', 10),
+        );
+      }
+    });
+
+    // Double-click resets position to auto (follows textarea)
+    this.btn.addEventListener('dblclick', () => {
+      this._positionLocked = false;
+      this._clearPersistedPosition();
+    });
+
+    // Start hidden — repositionNear() is called lazily after the first input event.
+    this.hide();
   }
 
-  /** Update button position to float near the prompt element. */
+  /** Update button position to float near the prompt element.
+   *  No-op if the user has dragged the button to a custom position. */
   private repositionNear(el: PromptElement): void {
+    if (this._positionLocked) return;
     const rect = el.getBoundingClientRect();
     this.wrap.style.bottom = `${window.innerHeight - rect.top + 8}px`;
     this.wrap.style.left = `${rect.left}px`;
+  }
+
+  private _savePosition(left: number, bottom: number): void {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        chrome.storage.local.set({ [DRAG_POS_KEY]: { left, bottom } });
+      }
+    } catch { /* storage unavailable */ }
+  }
+
+  private _clearPersistedPosition(): void {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        chrome.storage.local.remove(DRAG_POS_KEY);
+      }
+    } catch { /* storage unavailable */ }
+  }
+
+  private _loadPersistedPosition(): void {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+        chrome.storage.local.get(DRAG_POS_KEY, (result) => {
+          if (chrome.runtime?.lastError) return;
+          const pos = result[DRAG_POS_KEY] as { left: number; bottom: number } | undefined;
+          if (pos) {
+            this.wrap.style.left   = `${pos.left}px`;
+            this.wrap.style.bottom = `${pos.bottom}px`;
+            this._positionLocked = true;
+          }
+        });
+      }
+    } catch { /* storage unavailable */ }
   }
 
   /**
@@ -289,10 +435,11 @@ export class AugmenterUI {
       const ctx = await fetchCtx();
       const mode = await getAugmentationMode();
       const modeLabel = mode === 'rewrite' ? '↺ Rewrite with context' : '＋ Add project context';
-      if (ctx) {
+      if (ctx && ctx.token_count > 0) {
         this.btn.textContent = `${modeLabel} (${ctx.token_count.toLocaleString()} tokens)`;
       } else {
-        this.btn.textContent = modeLabel;
+        // token_count === 0 means server is reachable but no history recorded yet.
+        this.btn.textContent = `${modeLabel} — No context yet`;
       }
 
       this.btn.style.display = '';
@@ -303,29 +450,88 @@ export class AugmenterUI {
       // Phase 34: in rewrite mode, show mandatory diff view before writing
       // (Hard Rule 67). In append mode, existing behaviour is unchanged.
       this.btn.onclick = async () => {
-        const latestCtx = ctx ?? await fetchCtx();
-        if (!latestCtx) return;
+        if (this._suppressNextClick) { this._suppressNextClick = false; return; }
+        try {
+          const latestCtx = ctx ?? await fetchCtx();
+          if (!latestCtx || latestCtx.token_count === 0) {
+            // Server reachable but no chat history recorded yet (or offline).
+            // Surface this to the user instead of silently no-op-ing.
+            this.btn.textContent = 'No context recorded yet — chat with an AI first';
+            return;
+          }
 
-        this.originalText = getCurrentText(el);
-        const currentMode = await getAugmentationMode();
+          this.originalText = getCurrentText(el);
+          const currentMode = await getAugmentationMode();
 
-        if (currentMode === 'rewrite') {
-          // Hard Rule 67: generate rewrite and show diff before submitting.
-          const engine = new RewriteEngine();
-          const result = engine.generate(this.originalText, latestCtx.text);
-          const diffView = new DiffView();
-          const confirmed = await diffView.show(result);
-          diffView.hide();
-          if (!confirmed) return; // user cancelled → leave textarea unchanged
-          // Hard Rule 57: write through the React-aware setter.
-          writeText(el, result.rewrittenPrompt);
-          this.showBanner(el, latestCtx);
-        } else {
-          // Append mode (default) — unchanged behaviour.
-          const augmented = buildAugmentedPrompt(latestCtx.text, this.originalText);
-          // Hard Rule 57: only setReactInputValue / setContentEditableValue paths.
-          writeText(el, augmented);
-          this.showBanner(el, latestCtx);
+          if (currentMode === 'rewrite') {
+            // Hard Rule 67: generate rewrite and show diff before submitting.
+            // Disable the provider's send button for the review window so
+            // keyboard shortcuts can't submit the un-reviewed prompt.
+            // lockSubmitButton() fails open — returns no-op if no button found.
+            const unlockSubmit = lockSubmitButton();
+            try {
+              const engine = new RewriteEngine();
+              const result = await engine.generateWithRetrieval(
+                this.originalText,
+                this.externalSessionId ?? '',
+                this.providerId ?? '',
+              );
+              const diffView = new DiffView();
+              const confirmed = await diffView.show(result);
+              diffView.hide();
+
+              // §7 — Per-rewrite telemetry (fire-and-forget; never blocks workflow)
+              try {
+                const turns = result.retrievalResult?.retrieved_turns ?? [];
+                const simScores = turns
+                  .map((t) => t.similarity_score)
+                  .filter((s): s is number => s !== null && s !== undefined);
+                const avgSim = simScores.length > 0
+                  ? simScores.reduce((a, b) => a + b, 0) / simScores.length
+                  : null;
+                const nowMs = Date.now();
+                const ageDistHours = turns
+                  .map((t) => Math.round((nowMs - new Date(t.captured_at).getTime()) / 3_600_000))
+                  .filter((h) => h >= 0);
+                const rewriteId = typeof crypto !== 'undefined' && crypto.randomUUID
+                  ? crypto.randomUUID()
+                  : `rw-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+                recordRewriteTelemetry({
+                  rewrite_id: rewriteId,
+                  external_session_id: this.externalSessionId ?? undefined,
+                  provider_id: this.providerId ?? '',
+                  draft_prompt_chars: this.originalText.length,
+                  retrieved_turn_count: turns.length,
+                  retrieved_turn_avg_similarity: avgSim,
+                  retrieved_turn_age_dist_hours: ageDistHours.length > 0 ? ageDistHours : undefined,
+                  user_confirmed: confirmed,
+                  delimiter_format: turns.length > 0 ? 'xml_tags' : 'none',
+                  token_budget_used: result.retrievalResult?.token_budget_used,
+                  token_budget_total: result.retrievalResult?.token_budget_total,
+                  degraded: result.retrievalResult?.degraded ?? false,
+                  degraded_reason: result.retrievalResult?.reason ?? null,
+                }).catch(() => {});
+              } catch {
+                // Telemetry failure never disrupts the rewrite workflow
+              }
+
+              if (!confirmed) return; // user cancelled → leave textarea unchanged
+              // Hard Rule 57: write through the React-aware setter.
+              writeText(el, result.rewrittenPrompt);
+              this.showBanner(el, latestCtx);
+            } finally {
+              unlockSubmit(); // always re-enable, even if an error occurred
+            }
+          } else {
+            // Append mode (default) — unchanged behaviour.
+            const augmented = buildAugmentedPrompt(latestCtx.text, this.originalText);
+            // Hard Rule 57: only setReactInputValue / setContentEditableValue paths.
+            writeText(el, augmented);
+            this.showBanner(el, latestCtx);
+          }
+        } catch (err) {
+          console.error('[ML:click_error]', err);
         }
       };
     }, 250);

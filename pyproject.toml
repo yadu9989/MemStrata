@@ -1,8 +1,39 @@
-[build-system] 
-requires = ["setuptools>=61.0", "wheel"] 
-build-backend = "setuptools.build_meta" 
-[tool.setuptools] 
-packages = ["shared", "billing", "harness", "extension", "migrations", "memory_layer"] 
-[project] 
-name = "memstrata" 
-version = "0.1.0" 
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+# V5.2-D Phase D.7 — memory_layer_pro and its sub-packages must be
+# listed here so wheels built via `python -m build` include the
+# wizard / doctor / tray code. Prior to D.7 these worked in the dev
+# environment because the repo root is on PYTHONPATH; in a packaged
+# wheel install they wouldn't have shipped.
+packages = [
+    "shared",
+    "billing",
+    "harness",
+    "extension",
+    "migrations",
+    "memory_layer",
+    "memory_layer_pro",
+    "memory_layer_pro.tray",
+]
+
+[tool.setuptools.package-data]
+# V5.2-D Phase D.7 — bundle the tray icon PNGs into the wheel.
+# Without this, the tray binary would crash at runtime with
+# "asset file not found" on a fresh install.
+"memory_layer_pro.tray" = ["assets/*.png"]
+
+[project]
+name = "memstrata"
+version = "0.1.0"
+dependencies = [
+    # V5.2-A Phase 35.1 — tree-sitter chunker requires the core runtime
+    # plus per-language grammar packages. Pinned to compatible minimums
+    # that exercise the modern ts.Parser(ts.Language(...)) API.
+    "tree-sitter>=0.22",
+    "tree-sitter-python>=0.21",
+    "tree-sitter-javascript>=0.21",
+    "tree-sitter-typescript>=0.21",
+]

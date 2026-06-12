@@ -83,6 +83,19 @@
   </section>
 
   <hr />
+
+  <section id="mode-section">
+    <label for="popup-aug-mode">Injection mode</label>
+    <div class="row" style="margin-top:4px;">
+      <select id="popup-aug-mode" style="flex:1;background:#1f2937;border:1px solid #374151;border-radius:6px;color:#f9fafb;padding:6px 8px;font-size:12px;">
+        <option value="append">Append context (default)</option>
+        <option value="rewrite">Rewrite with diff view</option>
+      </select>
+    </div>
+    <p class="hint">Changed here and in Options page.</p>
+  </section>
+
+  <hr />
   <a href="http://localhost:8000/dashboard" target="_blank">Open dashboard ↗</a>
 
   <script src="popup.js"></script>

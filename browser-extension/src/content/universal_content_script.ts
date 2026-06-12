@@ -28,8 +28,13 @@ import { NLCommandDetector } from './shared/NLCommandDetector';
 import { NLCommandConfirmDialog } from './shared/NLCommandConfirmDialog';
 // Phase 33: feature gate (Hard Rule 64)
 import { isFeatureActive } from '../shared/FeatureGate';
-// Phase 34: rewrite mode (imported via augmenter — no direct use here)
-import { setReactInputValue } from './shared/augmenter';
+// Phase 34: augmenter UI (floating button) + rewrite mode
+import { setReactInputValue, getAugmenterUI, findPromptElement } from './shared/augmenter';
+import type { AugmenterUI } from './shared/augmenter';
+import { fetchContext, fetchBaselineStatus } from './shared/memory_layer_client';
+import type { ContextBlock } from './shared/memory_layer_client';
+import { TurnExtractor } from './engine/TurnExtractor';
+import { StreamInterceptorBridge } from './engine/StreamInterceptorBridge';
 
 // ── Session state ──────────────────────────────────────────────────────────────
 
@@ -41,9 +46,102 @@ let sessionId = mkSessionId();
 let externalSessionId: string | null = null;
 let turnCounter = 0;
 let activeChain: DetectorChain | null = null;
+
+// ── Stream-pause deduplication ────────────────────────────────────────────────
+// Maps each promoted DOM node to a stable message_id so the backend can UPSERT
+// (rather than INSERT) when a paused model resumes and fires onComplete again.
+const nodeMessageIds = new WeakMap<Element, string>();
+// Tracks message_ids seen this session — prevents double-counting turnCounter.
+let seenMessageIds = new Set<string>();
+
+function getOrAssignMessageId(node: Element): string {
+  let id = nodeMessageIds.get(node);
+  if (!id) {
+    id = `mlmsg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    try { node.setAttribute('data-ml-msg-id', id); } catch { /* read-only node */ }
+    nodeMessageIds.set(node, id);
+  }
+  return id;
+}
 let activeShadowPiercer: ShadowPiercer | null = null;
 let activeTelemetry: Telemetry | null = null;
 let activeMutationCounter: MutationObserver | null = null;
+let activeAugmenterUI: AugmenterUI | null = null;
+let activeAugInputHandler: ((evt: Event) => void) | null = null;
+let activeInterceptorBridge: StreamInterceptorBridge | null = null;
+
+// ── Augmenter debounce + response caches ──────────────────────────────────────
+// These prevent the extension from firing network requests on every keystroke
+// (the DDOS bug). All cache entries are keyed by project_id and expire by TTL.
+let augDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+let _cachedPid: string | null = null;
+let _cachedPidAt = 0;                          // ms timestamp
+const PID_TTL_MS = 30_000;
+
+let _cachedBaseline: { pid: string; value: { in_baseline: boolean; days_remaining: number | null } } | null = null;
+let _cachedBaselineAt = 0;
+const BASELINE_TTL_MS = 60_000;
+
+// Context cache is keyed by (project_id, external_session_id, provider) so two
+// chat threads in different tabs never share an entry — switching tabs always
+// fetches the active thread's own history.
+let _cachedCtx: {
+  pid: string;
+  esid: string | null;
+  provider: string | null;
+  value: ContextBlock | null;
+} | null = null;
+let _cachedCtxAt = 0;
+const CTX_TTL_MS = 30_000;
+
+async function getProjectIdCached(): Promise<string> {
+  const now = Date.now();
+  if (_cachedPid !== null && now - _cachedPidAt < PID_TTL_MS) return _cachedPid;
+  const pid = (await getStoredProjectId()) ?? 'default';
+  _cachedPid = pid;
+  _cachedPidAt = now;
+  return pid;
+}
+
+async function fetchBaselineCached(pid: string): Promise<{ in_baseline: boolean; days_remaining: number | null }> {
+  const now = Date.now();
+  if (_cachedBaseline?.pid === pid && now - _cachedBaselineAt < BASELINE_TTL_MS) {
+    return _cachedBaseline.value;
+  }
+  const value = await fetchBaselineStatus(pid).catch(() => ({ in_baseline: false, days_remaining: null }));
+  _cachedBaseline = { pid, value };
+  _cachedBaselineAt = now;
+  return value;
+}
+
+async function fetchContextCached(
+  pid: string,
+  esid: string | null,
+  provider: string | null,
+): Promise<ContextBlock | null> {
+  const now = Date.now();
+  if (
+    _cachedCtx &&
+    _cachedCtx.pid === pid &&
+    _cachedCtx.esid === esid &&
+    _cachedCtx.provider === provider &&
+    now - _cachedCtxAt < CTX_TTL_MS
+  ) {
+    return _cachedCtx.value;
+  }
+  const value = await fetchContext(pid, esid, provider).catch(() => null);
+  _cachedCtx = { pid, esid, provider, value };
+  _cachedCtxAt = now;
+  return value;
+}
+
+function clearAugCaches(): void {
+  if (augDebounceTimer !== null) { clearTimeout(augDebounceTimer); augDebounceTimer = null; }
+  _cachedPid = null; _cachedPidAt = 0;
+  _cachedBaseline = null; _cachedBaselineAt = 0;
+  _cachedCtx = null; _cachedCtxAt = 0;
+}
 
 // ── Core init ──────────────────────────────────────────────────────────────────
 
@@ -96,9 +194,12 @@ async function actualInit(): Promise<void> {
   activeShadowPiercer?.dispose();
   activeTelemetry?.dispose();
   activeMutationCounter?.disconnect();
+  activeInterceptorBridge?.dispose();
+  activeInterceptorBridge = null;
 
   sessionId = mkSessionId();
   turnCounter = 0;
+  seenMessageIds = new Set<string>();
 
   if (isDebug()) {
     const ariaLiveCount = document.querySelectorAll('[aria-live]').length;
@@ -133,6 +234,12 @@ async function actualInit(): Promise<void> {
   });
   activeMutationCounter = mutationCounter;
 
+  // ── SSE Interceptor Bridge (Tier 1) ────────────────────────────────────────
+  // Inject fetch_interceptor.js into the page's MAIN world once per init cycle.
+  const interceptorBridge = new StreamInterceptorBridge();
+  activeInterceptorBridge = interceptorBridge;
+  interceptorBridge.inject().catch(() => {}); // fire-and-forget; failures are non-fatal
+
   // ── Detector chain ──────────────────────────────────────────────────────────
 
   if (isDebug()) console.log('[ML:init] starting DetectorChain with 4 detectors + ShadowPiercer');
@@ -150,20 +257,37 @@ async function actualInit(): Promise<void> {
 
   const onPromoted = (node: Element, confidence: number): void => {
     if (isDebug()) console.log('[ML:promoted] node promoted conf=%.4f', confidence, node);
-    new StreamWatcher(
+    // Assign a stable message_id to this DOM node. Used as the backend UPSERT key
+    // so a stream-paused model that causes onComplete to fire more than once for
+    // the same node updates the existing row rather than inserting a duplicate.
+    const messageId = getOrAssignMessageId(node);
+    const watcher = new StreamWatcher(
       node,
       hints.debounce_ms ?? 1500,
       confidence,
       ['detector'],
       async (text, _meta) => {
+        // Deregister from bridge — this stream is done.
+        interceptorBridge.setActiveWatcher(null);
+        // Defense-in-depth: primary filter is in StreamWatcher → isStreamingArtifact(),
+        // but guard here too so any regression in that path cannot pollute telemetry.
+        if (TurnExtractor.isStreamingArtifact(text)) return;
         try {
           const projectId = await getStoredProjectId();
-          turnCounter += 1;
+          // Only increment turnCounter the first time we see this message node.
+          // If onComplete fires again for the same node (stream-pause race),
+          // the backend UPSERT will update the row without creating a duplicate.
+          if (!seenMessageIds.has(messageId)) {
+            seenMessageIds.add(messageId);
+            turnCounter += 1;
+          }
           await recordChatTurn({
             project_id: projectId ?? 'default',
             session_id: sessionId,
             external_session_id: externalSessionId,
             turn_id: turnCounter,
+            message_id: messageId,
+            client_source: 'chat',
             role: 'assistant',
             text,
             provider: hints.provider_id,
@@ -174,7 +298,11 @@ async function actualInit(): Promise<void> {
           // Server offline — never disrupt the user's chat session
         }
       },
+      hints,
     );
+    // Tier 1: register this watcher with the SSE bridge so a network-layer
+    // stream-complete signal can fire it before the debounce expires.
+    interceptorBridge.setActiveWatcher(() => watcher.signalSseComplete());
   };
 
   chain.start(
@@ -209,7 +337,7 @@ async function actualInit(): Promise<void> {
     const isInput =
       target instanceof HTMLTextAreaElement ||
       target instanceof HTMLInputElement ||
-      target.contentEditable === 'true';
+      target.isContentEditable;
     if (!isInput) return;
 
     const text =
@@ -257,6 +385,52 @@ async function actualInit(): Promise<void> {
   // Store a reference so we can remove it on SPA navigation
   (window as Window & { _mlNlHandler?: EventListener })._mlNlHandler = nlKeydownHandler as unknown as EventListener;
 
+  // ── Phase 34: AugmenterUI (floating "+ Add project context" button) ────────
+  // Create the Shadow-DOM button and wire it to every textarea input event.
+  // Hard Rule 58: the button appearing is not injection; only a click injects.
+
+  activeAugmenterUI?.destroy();
+  activeAugmenterUI = getAugmenterUI();
+  const augUI = activeAugmenterUI;
+  augUI.externalSessionId = externalSessionId;
+  augUI.providerId = hints.provider_id;
+
+  if (activeAugInputHandler) {
+    document.removeEventListener('input', activeAugInputHandler, true);
+  }
+
+  activeAugInputHandler = (evt: Event): void => {
+    // isTrusted guard: skip synthetic InputEvents dispatched by setReactInputValue
+    // to prevent a feedback loop (our own setter re-triggering this listener).
+    if (!(evt as InputEvent).isTrusted) return;
+
+    const target = evt.target as HTMLElement;
+    const isPromptInput =
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLInputElement ||
+      (target.isContentEditable && target !== document.body);
+    if (!isPromptInput) return;
+
+    // Debounce: cancel any pending tick and start a fresh 250 ms window.
+    // ALL async work (chrome.storage + network) lives inside the timeout so
+    // rapid keystrokes produce exactly one request cycle, not N.
+    if (augDebounceTimer !== null) { clearTimeout(augDebounceTimer); augDebounceTimer = null; }
+    augDebounceTimer = setTimeout(async () => {
+      augDebounceTimer = null;
+      const pid = await getProjectIdCached();
+      const baselineStatus = await fetchBaselineCached(pid);
+      // Close over the active externalSessionId so each chat thread fetches
+      // its own context. SPA navigation re-runs actualInit and refreshes both.
+      augUI.onTextareaInput(
+        target,
+        () => fetchContextCached(pid, externalSessionId, hints.provider_id),
+        baselineStatus,
+      );
+    }, 250);
+  };
+
+  document.addEventListener('input', activeAugInputHandler, true);
+
   // SPA navigation: reinit on URL change (chat sites navigate without full reload)
   // externalSessionId is re-detected inside the new actualInit call.
   watchUrlChanges(() => {
@@ -267,6 +441,19 @@ async function actualInit(): Promise<void> {
     // Remove the NL handler from the previous session
     const prev = (window as Window & { _mlNlHandler?: EventListener })._mlNlHandler;
     if (prev) document.removeEventListener('keydown', prev, true);
+    // Dispose the SSE bridge for this session
+    activeInterceptorBridge?.dispose();
+    activeInterceptorBridge = null;
+    // Remove the augmenter input handler, clear caches, and destroy the UI
+    clearAugCaches();
+    if (activeAugInputHandler) {
+      document.removeEventListener('input', activeAugInputHandler, true);
+      activeAugInputHandler = null;
+    }
+    activeAugmenterUI?.destroy();
+    activeAugmenterUI = null;
+    // Clear message dedup set so the new session starts fresh.
+    seenMessageIds = new Set<string>();
     safeInit(actualInit);
   });
 }

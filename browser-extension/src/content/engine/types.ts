@@ -30,6 +30,16 @@ export interface ProviderHints {
   exclude_selectors?: string[];
   shadow_hosts?: string[];
   url_session_pattern?: string;
+  // Velocity flatline tuning (Phase 2)
+  flatline_ratio?: number;    // fraction of peak rate that counts as "flatlined" (default 0.05)
+  min_quiet_ms?: number;      // ms of sub-threshold velocity before declaring done (default 800)
+  disable_flatline?: boolean; // opt-out for providers where velocity decay is unreliable
+}
+
+// Signal emitted by any Tier that has determined the stream is complete.
+export interface StreamCompletionSignal {
+  source: 'debounce' | 'stop_button' | 'flatline' | 'sse_interceptor';
+  ts: number; // performance.now() at the moment the signal fired
 }
 
 // Shared selector used by VelocityDetector and SemanticAttrDetector to resolve

@@ -224,7 +224,11 @@ def _cmd_register(args: argparse.Namespace) -> None:
 # ── api ────────────────────────────────────────────────────────────────────────
 
 def _cmd_api(args: argparse.Namespace) -> None:
-    """Start the Memory Layer API server."""
+    """Start the Memory Layer API server.
+
+    Hard Rule 77 (V5.2-B): the local server binds strictly to 127.0.0.1.
+    The host argument is fixed; no external-interface binding is permitted.
+    """
     try:
         import uvicorn
     except ImportError:
@@ -234,7 +238,7 @@ def _cmd_api(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    host: str = getattr(args, "host", "127.0.0.1")
+    host = "127.0.0.1"
     port: int = getattr(args, "port", 8000)
     print(f"Starting Memory Layer API server on http://{host}:{port}")
     uvicorn.run("memory_layer.layer3.api_server:app", host=host, port=port)
@@ -287,11 +291,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_reg.set_defaults(func=_cmd_register)
 
-    # api
-    p_api = sub.add_parser("api", help="Start the Memory Layer API server")
-    p_api.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
+    # api — Hard Rule 77: bind is loopback-only; no --host flag is exposed.
+    p_api = sub.add_parser("api", help="Start the Memory Layer API server (binds 127.0.0.1 only)")
     p_api.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
     p_api.set_defaults(func=_cmd_api)
+
+    # ingest
+    p_ingest = sub.add_parser(
+        "ingest",
+        help="Walk a project directory and embed source files for /context/injection",
+    )
+    p_ingest.add_argument("path", help="Project root to ingest (e.g. '.' for the cwd)")
+    p_ingest.add_argument(
+        "--project-id",
+        default=None,
+        help="Override project_id (defaults to the directory basename)",
+    )
+    p_ingest.add_argument(
+        "--no-embed",
+        action="store_true",
+        default=False,
+        help="Skip Ollama embedding; store text chunks only. Useful when "
+             "Ollama is offline - re-run without this flag later to backfill.",
+    )
+
+    def _cmd_ingest_wrapper(args: argparse.Namespace) -> None:
+        from memory_layer.cli.ingest import cmd_ingest
+        cmd_ingest(args)
+
+    p_ingest.set_defaults(func=_cmd_ingest_wrapper)
 
     return parser
 

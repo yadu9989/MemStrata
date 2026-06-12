@@ -18,6 +18,11 @@ export interface ChatTurnPayload {
   session_id: string;
   external_session_id: string | null;
   turn_id: number;
+  /** Stable DOM-node identifier; backend UPSERTs on (session_id, message_id) to
+   *  prevent duplicate rows when a stream-paused model fires onComplete twice. */
+  message_id?: string;
+  /** Explicit client origin for dashboard Chat vs Coding split. */
+  client_source?: 'chat' | 'coding' | 'browser_ext' | 'harness';
   role: 'assistant' | 'user';
   text: string;
   provider: string;
@@ -72,9 +77,24 @@ export async function checkHealth(): Promise<boolean> {
   }
 }
 
-export async function fetchContext(projectId: string): Promise<ContextBlock | null> {
+/**
+ * Fetch deduped chat context.
+ *
+ * Per-thread isolation (V5.4 §2.1): when `externalSessionId` + `provider` are
+ * supplied, the backend joins on chat_sessions and returns ONLY turns ingested
+ * in this specific web chat thread. Pass null for both to fall back to harness
+ * project-scoped retrieval.
+ */
+export async function fetchContext(
+  projectId: string,
+  externalSessionId: string | null = null,
+  provider: string | null = null,
+): Promise<ContextBlock | null> {
   try {
-    const r = await apiFetch(`/context?project_id=${encodeURIComponent(projectId)}`);
+    const params = new URLSearchParams({ project_id: projectId });
+    if (externalSessionId) params.set('external_session_id', externalSessionId);
+    if (provider)          params.set('provider', provider);
+    const r = await apiFetch(`/context?${params.toString()}`);
     if (!r.ok) return null;
     return r.json() as Promise<ContextBlock>;
   } catch {
@@ -104,6 +124,80 @@ export async function fetchBaselineStatus(
     return r.json() as Promise<BaselineStatus>;
   } catch {
     return { in_baseline: false, days_remaining: null };
+  }
+}
+
+export interface RetrievedTurn {
+  timeline_id: number;
+  role: 'user' | 'assistant';
+  text: string;
+  captured_at: string;
+  similarity_score: number | null;
+  recency_score: number | null;
+  final_score: number | null;
+  age_human: string;
+}
+
+export interface RetrievalResult {
+  retrieved_turns: RetrievedTurn[];
+  token_budget_used?: number;
+  token_budget_total?: number;
+  total_session_turns?: number;
+  turns_with_embeddings?: number;
+  turns_pending_embedding?: number;
+  turns_considered?: number;
+  turns_returned?: number;
+  degraded: boolean;
+  reason?: string;
+}
+
+export async function fetchChatRewriteContext(
+  externalSessionId: string,
+  providerId: string,
+  draftPrompt: string,
+  tokenBudget = 1500,
+): Promise<RetrievalResult | null> {
+  try {
+    const r = await apiFetch('/context/for-chat-rewrite', {
+      method: 'POST',
+      body: JSON.stringify({
+        external_session_id: externalSessionId,
+        provider_id: providerId,
+        draft_prompt: draftPrompt,
+        target_token_budget: tokenBudget,
+      }),
+    });
+    if (!r.ok) return null;
+    return r.json() as Promise<RetrievalResult>;
+  } catch {
+    return null;
+  }
+}
+
+export interface RewriteTelemetryPayload {
+  rewrite_id: string;
+  external_session_id?: string;
+  provider_id: string;
+  draft_prompt_chars: number;
+  retrieved_turn_count: number;
+  retrieved_turn_avg_similarity?: number | null;
+  retrieved_turn_age_dist_hours?: number[];
+  user_confirmed: boolean;
+  delimiter_format: string;
+  token_budget_used?: number;
+  token_budget_total?: number;
+  degraded: boolean;
+  degraded_reason?: string | null;
+}
+
+export async function recordRewriteTelemetry(payload: RewriteTelemetryPayload): Promise<void> {
+  try {
+    await apiFetch('/telemetry/rewrite', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Fire-and-forget — never disrupt the workflow
   }
 }
 

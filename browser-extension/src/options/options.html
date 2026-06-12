@@ -57,6 +57,18 @@
     </select>
   </div>
 
+  <h2>Augmentation mode</h2>
+  <div class="row">
+    <span>Context injection</span>
+    <select id="augmentation-mode">
+      <option value="append">Append (default)</option>
+      <option value="rewrite">Rewrite with diff view</option>
+    </select>
+  </div>
+  <p style="font-size:12px;color:#64748b;margin:4px 0 14px">
+    Rewrite compresses your prompt with saved context. A mandatory diff is shown before submission (Hard Rule 67).
+  </p>
+
   <button class="primary" id="save-btn">Save</button>
   <div id="saved-msg">Settings saved.</div>
 

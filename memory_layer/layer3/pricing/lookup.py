@@ -144,3 +144,23 @@ def compute_cache_savings_usd(
     standard = cached_tokens * rates.input_per_m / 1_000_000
     actual = cached_tokens * rates.cache_read_per_m / 1_000_000
     return max(0.0, standard - actual)
+
+
+def compute_output_savings_usd(
+    baseline_output_tokens: int,
+    actual_output_tokens: int,
+    rates: Rates,
+) -> float:
+    """Dollar savings from generating a shorter output than the cohort baseline.
+
+    Memory Layer's injected context lets the model answer more concisely (it
+    doesn't have to restate background). When actual_output < baseline (the
+    project's cohort-measured average output per turn), the user saves
+    (baseline - actual) * output_per_m.
+
+    Per V5.3 Hard Rule 60, this is *measured* savings against the cohort
+    baseline, not an "imputed" counterfactual — only credit-eligible when
+    cohort baseline has actually closed (caller's responsibility to gate).
+    """
+    saved = max(0, baseline_output_tokens - actual_output_tokens)
+    return saved * rates.output_per_m / 1_000_000

@@ -26,6 +26,12 @@ const contentScripts = [
   'src/content/universal_content_script.ts',
 ];
 
+// Phase 35: SSE interceptor injected into MAIN world via chrome.scripting.
+// Compiled separately so the service worker can reference it by filename.
+const interceptorScripts = [
+  'src/interceptor/fetch_interceptor.ts',
+];
+
 const uiScripts = [
   'src/popup/popup.ts',
   'src/options/options.ts',
@@ -38,7 +44,7 @@ const workerScript = [
 async function buildAll() {
   await esbuild.build({
     ...commonOptions,
-    entryPoints: [...contentScripts, ...uiScripts, ...workerScript],
+    entryPoints: [...contentScripts, ...uiScripts, ...workerScript, ...interceptorScripts],
     outdir,
     outbase: 'src',
   });
@@ -48,7 +54,7 @@ async function buildAll() {
 async function watchAll() {
   const ctx = await esbuild.context({
     ...commonOptions,
-    entryPoints: [...contentScripts, ...uiScripts, ...workerScript],
+    entryPoints: [...contentScripts, ...uiScripts, ...workerScript, ...interceptorScripts],
     outdir,
     outbase: 'src',
   });

@@ -1,14 +1,15 @@
 // src/content/shared/RewriteEngine.ts
 //
-// Phase 34 — Rewrite mode: compress session context into the user's prompt.
+// Phase 34 — Rewrite mode: retrieve session context and embed into the prompt.
 //
 // Hard Rule 67: the caller MUST show a diff view before submitting the
 // rewritten prompt. Auto-rewrite without showing the diff is rejected.
 //
-// This engine runs entirely client-side (no LLM call). It compresses the
-// retrieved context to at most maxContextChars, then produces a rewritten
-// prompt that embeds the compressed context ahead of the user's original
-// text. The diff shows what changed so the user can inspect before confirming.
+// Phase 34.4: generateWithRetrieval() calls POST /context/for-chat-rewrite
+// and formats the result using <Established_Context> / <Active_Prompt> tags.
+
+import type { RetrievalResult } from './memory_layer_client.js';
+import { fetchChatRewriteContext } from './memory_layer_client.js';
 
 export interface RewriteResult {
   originalPrompt: string;
@@ -16,6 +17,7 @@ export interface RewriteResult {
   diff: DiffSegment[];
   estimatedTokensSaved: number;
   estimatedCostSaved: number;
+  retrievalResult?: RetrievalResult | null;
 }
 
 export interface DiffSegment {
@@ -146,5 +148,64 @@ export class RewriteEngine {
     if (space > 0) return trimmed.slice(0, space) + '…';
 
     return trimmed.slice(0, maxChars) + '…';
+  }
+
+  /**
+   * Retrieve relevant context from the backend and produce a rewritten prompt.
+   * Falls back gracefully if the backend is unreachable (Hard Rule 64).
+   *
+   * @param originalPrompt   The user's typed prompt.
+   * @param externalSessionId Chat session ID from the provider URL.
+   * @param providerId       e.g. "claude", "openai".
+   * @param tokenBudget      Max tokens of retrieved context to embed.
+   */
+  async generateWithRetrieval(
+    originalPrompt: string,
+    externalSessionId: string,
+    providerId: string,
+    tokenBudget = 1500,
+  ): Promise<RewriteResult> {
+    let retrieval: RetrievalResult | null = null;
+
+    if (externalSessionId && providerId) {
+      try {
+        retrieval = await fetchChatRewriteContext(
+          externalSessionId,
+          providerId,
+          originalPrompt,
+          tokenBudget,
+        );
+      } catch {
+        // Hard Rule 64: backend unavailable → degrade to original prompt
+      }
+    }
+
+    const rewritten = this._formatRewrittenPrompt(retrieval, originalPrompt);
+    const diff = computeDiff(originalPrompt, rewritten);
+
+    const contextTokens = retrieval?.token_budget_used ?? 0;
+    const estimatedCostSaved = parseFloat((contextTokens * 0.00003).toFixed(5));
+
+    return {
+      originalPrompt,
+      rewrittenPrompt: rewritten,
+      diff,
+      estimatedTokensSaved: contextTokens,
+      estimatedCostSaved,
+      retrievalResult: retrieval,
+    };
+  }
+
+  private _formatRewrittenPrompt(
+    retrieval: RetrievalResult | null,
+    draftPrompt: string,
+  ): string {
+    if (!retrieval || !retrieval.retrieved_turns || retrieval.retrieved_turns.length === 0) {
+      return draftPrompt;
+    }
+    const ctxLines = retrieval.retrieved_turns
+      .map((t) => `[${t.role.toUpperCase()}] ${t.text}`)
+      .join('\n\n');
+    return `<Established_Context>\n${ctxLines}\n</Established_Context>\n\n<Active_Prompt>\n${draftPrompt}\n</Active_Prompt>`;
   }
 }
