@@ -37,13 +37,23 @@ def client(isolated_db):
 
 
 @pytest.fixture
-def db_conn(tmp_path):
+def db_conn(tmp_path, isolated_db):
+    """Explicit isolated_db dependency + try/finally close.
+
+    Windows fixture ordering guarantee: don't open this connection
+    until the env var is set and the lifespan-managed connection has
+    released. try/finally closes even on test-side raise.
+    """
     path = tmp_path / "test_edge.db"
     conn = sqlite3.connect(str(path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    yield conn
-    conn.close()
+    from memstrata.layer3._db import _load_vec_extension
+    _load_vec_extension(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

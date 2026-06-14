@@ -38,12 +38,19 @@ dependencies = [
     # Local SQLite + vector storage
     "sqlite-vec>=0.1.6",
 
-    # Tree-sitter AST grounding (Layer 1). Pinned to compatible minimums
-    # that exercise the modern ts.Parser(ts.Language(...)) API.
-    "tree-sitter>=0.22",
-    "tree-sitter-python>=0.21",
-    "tree-sitter-javascript>=0.21",
-    "tree-sitter-typescript>=0.21",
+    # Tree-sitter AST grounding (Layer 1).
+    #
+    # CRITICAL: pin core + every grammar to the SAME minor (0.23.x).
+    # Mixing a 0.25 core with a 0.23 grammar (or any other ABI cross)
+    # produces silent segfaults on Ubuntu + Windows fatal access
+    # violations during AST parsing. The grammar wheels embed their
+    # parser binaries compiled against a specific tree-sitter core ABI;
+    # the loader does not check at runtime. We pin to <0.24 so pip
+    # never installs a cross-ABI mix.
+    "tree-sitter>=0.23,<0.24",
+    "tree-sitter-python>=0.23,<0.24",
+    "tree-sitter-javascript>=0.23,<0.24",
+    "tree-sitter-typescript>=0.23,<0.24",
 
     # MCP server (Anthropic-spec) for Claude Desktop / Cursor / etc.
     "mcp>=1.0",

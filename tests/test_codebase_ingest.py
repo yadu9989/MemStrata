@@ -35,12 +35,27 @@ def client(isolated_db):
 
 
 @pytest.fixture
-def db_conn(tmp_path):
+def db_conn(tmp_path, isolated_db):
+    """Direct connection to the test DB.
+
+    Depends on ``isolated_db`` explicitly so this connection opens
+    AFTER the env var is set and any lifespan-managed connection has
+    released its WAL+SHM files (Windows file-locking edge case). Loads
+    sqlite-vec on the connection so verification queries against vec0
+    virtual tables (``code_chunks_vec`` etc.) succeed. Wraps the yield
+    in try/finally so a test-side exception still releases the file
+    lock — that's the failure mode that surfaces as a Windows access
+    violation when tmp_path tears down.
+    """
     path = tmp_path / "test_core.db"
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
-    yield conn
-    conn.close()
+    from memstrata.layer3._db import _load_vec_extension
+    _load_vec_extension(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 @pytest.fixture

@@ -33,12 +33,17 @@ def client(isolated_db):
 
 
 @pytest.fixture
-def db_conn(tmp_path):
+def db_conn(tmp_path, isolated_db):
+    """Explicit isolated_db dependency + sqlite-vec load + try/finally."""
     path = tmp_path / "test_core.db"
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
-    yield conn
-    conn.close()
+    from memstrata.layer3._db import _load_vec_extension
+    _load_vec_extension(conn)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _seed_turns(client: TestClient) -> None:
