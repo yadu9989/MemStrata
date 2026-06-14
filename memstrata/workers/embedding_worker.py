@@ -14,7 +14,7 @@ import sqlite3
 import threading
 from typing import NamedTuple
 
-import requests
+import httpx
 
 from memstrata.layer3._db import _load_vec_extension, get_db_path
 
@@ -255,7 +255,7 @@ class EmbeddingWorker:
     def _embed_batch(self, texts: list[str]) -> list[list[float]] | None:
         """POST to Ollama /api/embed. Returns None on any failure."""
         try:
-            resp = requests.post(
+            resp = httpx.post(
                 _OLLAMA_EMBED_URL,
                 json={"model": _EMBED_MODEL, "input": texts},
                 timeout=60.0,

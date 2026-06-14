@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-import requests
+import httpx
 
 from memstrata.layer3._db import parse_recorded_at
 
@@ -35,7 +35,7 @@ def embed_text(text: str) -> list[float] | None:
     Callers must handle None gracefully (degraded mode per §5.2).
     """
     try:
-        resp = requests.post(
+        resp = httpx.post(
             _OLLAMA_EMBED_URL,
             json={"model": _EMBED_MODEL, "input": [text]},
             timeout=10.0,

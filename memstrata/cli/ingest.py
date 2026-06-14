@@ -30,7 +30,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-import requests
+import httpx
 
 from memstrata.layer3._db import _load_vec_extension, get_db_path, init_db
 
@@ -167,7 +167,7 @@ def _sha1_hex(s: bytes) -> str:
 def _embed_batch(texts: list[str], *, timeout: float = 60.0) -> list[list[float]] | None:
     """POST to Ollama /api/embed. Returns the list of vectors or None on any error."""
     try:
-        r = requests.post(
+        r = httpx.post(
             OLLAMA_EMBED_URL,
             json={"model": EMBED_MODEL, "input": texts},
             timeout=timeout,
