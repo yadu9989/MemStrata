@@ -246,6 +246,8 @@ def _cmd_api(args: argparse.Namespace) -> None:
 # ── Parser ─────────────────────────────────────────────────────────────────────
 
 def _build_parser() -> argparse.ArgumentParser:
+    from memstrata import __version__
+
     parser = argparse.ArgumentParser(
         prog="memstrata",
         description="MemStrata — open-source context server for LLM-assisted coding.",
@@ -258,6 +260,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "Project discovery:\n"
             "  memstrata register .    # register current directory manually\n"
         ),
+    )
+    parser.add_argument(
+        "--version", action="version",
+        version=f"memstrata {__version__}",
     )
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     sub.required = True

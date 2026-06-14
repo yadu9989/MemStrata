@@ -13,9 +13,10 @@ commitments are themselves part of the security posture.
 **Do not open a public GitHub issue.** That's the wrong channel for
 anything that could be exploited.
 
-Send a report to `security@memstrata.dev`. Encrypt with our public PGP
-key (`docs/security-pgp.asc`) if the issue is severe enough to warrant
-it; otherwise plain email is fine.
+Send a report to `security@memstrata.dev`. Plain email is fine —
+we don't currently publish a PGP key. If you need encrypted reporting
+for a sensitive disclosure, mention that in your first message and
+we'll work out a channel.
 
 Include:
 - Affected version (`memstrata --version`) and OS

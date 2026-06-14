@@ -52,7 +52,7 @@ pytest tests/ingestion/         # one subsystem at a time
 When you touch the dashboard HTML/JS, also do a manual smoke:
 
 ```bash
-python -m memstrata.cli.main daemon start    # or memstrata daemon start
+memstrata api      # start the daemon on 127.0.0.1:8000
 # Open http://127.0.0.1:8000/dashboard and click through every tab.
 ```
 

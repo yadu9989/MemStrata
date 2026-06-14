@@ -138,7 +138,7 @@ that's the whole point of the dependency direction.
 
 ```bash
 pip install memstrata
-python -m memstrata.cli.main daemon start
+memstrata api
 ```
 
 That gives you:

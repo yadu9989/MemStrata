@@ -36,9 +36,7 @@ The MCP server runs as a sub-app of the main daemon. Starting the
 daemon starts MCP automatically:
 
 ```bash
-python -m memstrata.cli.main daemon start
-# or, equivalently, if you've installed the `memstrata` console script:
-memstrata daemon start
+memstrata api      # binds 127.0.0.1:8000; MCP mounts at /mcp
 ```
 
 Once the daemon is up, MCP is at `http://127.0.0.1:8000/mcp`.

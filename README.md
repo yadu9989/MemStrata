@@ -42,7 +42,8 @@ private repository and consumes this package as a PyPI dependency. See
 
 ```bash
 pip install memstrata
-python -m memstrata.cli.main daemon start
+memstrata init     # one-time interactive setup
+memstrata api      # start the daemon on 127.0.0.1:8000
 ```
 
 The daemon binds to `127.0.0.1:8000`. Open `http://127.0.0.1:8000/dashboard`
