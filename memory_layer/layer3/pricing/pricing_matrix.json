@@ -1,6 +1,7 @@
 {
   "_schema_version": 1,
-  "_updated_at": "2026-05-31",
+  "_updated_at": "2026-06-13",
+  "_note": "Static fallback used when OpenRouter is unreachable. Live rates are pulled from https://openrouter.ai/api/v1/models on daemon startup and every 24h thereafter. USD per million tokens. Last manual verification: V5.2-E E.3.",
   "providers": {
     "anthropic": {
       "claude-sonnet-4-6": {

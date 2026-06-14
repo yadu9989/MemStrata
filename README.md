@@ -1,296 +1,118 @@
-# Memory Layer Pro — Harness
+# MemStrata
 
-Active-interception proxy that sits between your coding agent and the LLM provider.
-Every request gets your project's context block injected automatically.
-Every response is counted and written to the session timeline.
+**A local-first, verification-first context engine for AI workflows.**
 
-```
-Your agent  →  localhost:8080  →  OpenAI / Anthropic / Ollama
-                (harness)
-                  ↕ fetch context
-              memory-layer core
-              (MIT, runs separately)
-```
+MemStrata sits between you and every AI tool you use. It captures conversations
+from the browser, indexes your codebase locally, and serves a context block to
+whichever LLM you're talking to next. Your code stays on your machine. Your
+conversation history stays on your machine. No telemetry leaves the box.
 
----
+This repository is the **open-source core**: the local daemon, the chat-capture
+browser extension, the MCP server, and the dashboard. It is MIT-licensed and
+fully usable on its own.
 
-## Requirements
-
-- Python 3.11+
-- [Memory Layer core](https://github.com/your-org/memory-layer) running on `:8000` (MIT package, installed separately)
-- `pipx` for isolated installation
+The commercial Pro tier (token-budgeted context injection through a proxy
+harness, money-back-guaranteed savings, IDE integration) lives in a separate,
+private repository and consumes this package as a PyPI dependency. See
+[memstrata.dev](https://memstrata.dev) if you want the paid product.
 
 ---
 
-## Installation
+## What's in this repo
 
-```bash
-# 1. Install the harness
-pipx install memory-layer-pro
-
-# 2. Register as an OS autostart service (runs on every login)
-memory-layer-pro install
-
-# 3. Confirm it is running
-memory-layer-pro status
-```
-
-To run in the foreground instead (useful for debugging):
-
-```bash
-memory-layer-pro start
-```
-
-The harness listens on `http://localhost:8080` by default.
+| Path | What it does |
+|---|---|
+| `memory_layer/layer3/api_server.py` | The local daemon's FastAPI app — telemetry, dashboard, MCP routing |
+| `memory_layer/layer3/ingestion/` | File watcher, tree-sitter chunker, opt-in lifecycle, denylists |
+| `memory_layer/layer3/mcp_server.py`, `mcp_app.py` | MCP server (Anthropic-spec) for Claude Desktop / Cursor / etc. |
+| `memory_layer/layer3/_db.py` | SQLite schema with `sqlite-vec` for local vector search |
+| `memory_layer/layer3/retrieval.py` | Token-budgeted context retrieval against the local store |
+| `memory_layer/layer3/pricing/` | Live OpenRouter price sync + bundled static fallback for offline use |
+| `memory_layer/layer3/ollama_health.py` | Shared Ollama reachability probe (used by the dashboard) |
+| `memory_layer/workers/embedding_worker.py` | Background worker that embeds new turns into the vector store |
+| `memory_layer/cli/` | The `memstrata` CLI: `register`, `ingest`, the cd-hook generator |
+| `memory_layer/config/keychain.py` | OS keyring wrapper for storing per-provider API keys |
+| `browser-extension/` | Chrome / Edge / Firefox extension that captures chat turns from every major LLM front-end |
+| `migrations/` | SQL migrations |
+| `shared/telemetry_schema.json` | The JSON schema for telemetry events (public contract) |
 
 ---
 
-## Configuration
+## Quickstart
 
-On first run, create `~/.memory-layer-pro/harness.toml`:
-
-```toml
-[harness]
-listen_port = 8080
-log_level   = "info"   # "debug" for verbose output
-
-[memory_layer]
-core_url = "http://localhost:8000"   # where the MIT core is running
-api_key  = "${MEMORY_LAYER_API_KEY}" # optional; env-var expansion supported
-
-[provider.openai]
-upstream_url = "https://api.openai.com"
-
-[provider.anthropic]
-upstream_url = "https://api.anthropic.com"
-
-[provider.ollama]
-upstream_url = "http://localhost:11434"
+```bash
+pip install memstrata
+python -m memory_layer.cli.main daemon start
 ```
 
-> API keys for OpenAI/Anthropic are **never** stored here. They are forwarded
-> transparently from whatever your coding agent passes in the `Authorization`
-> header. See [NON_FEATURES.md](NON_FEATURES.md).
+The daemon binds to `127.0.0.1:8000`. Open `http://127.0.0.1:8000/dashboard`
+to see what's captured.
+
+Install the browser extension from your browser's add-on store (see the
+[browser-extension/](browser-extension/) directory for build instructions
+if you want to load it unpacked).
 
 ---
 
-## Agent configuration
+## Architecture commitments
 
-### Aider
+These aren't aspirational — they're enforced in the code and tested for in CI:
 
-Point Aider's OpenAI-compatible endpoint at the harness:
+1. **Localhost-only binding.** Every HTTP server in this repo hard-codes
+   `host="127.0.0.1"`. No `0.0.0.0`, no LAN exposure, no remote access.
 
-```bash
-aider \
-  --openai-api-base http://localhost:8080/v1 \
-  --openai-api-key  $OPENAI_API_KEY \
-  --model gpt-4o
-```
+2. **No TLS interception.** The MCP server and the dashboard speak plain
+   HTTP on loopback. The browser extension talks directly to provider
+   APIs and to this daemon's loopback endpoint. There is no MITM proxy
+   in the open-source stack.
 
-For streaming (recommended):
+3. **Local storage only.** All telemetry, all chat history, all vectors,
+   all API keys live in `~/.memstrata/` (or `$ML_DATA_DIR` if set).
+   Nothing is uploaded to a MemStrata-owned cloud service. There is no
+   such service.
 
-```bash
-aider \
-  --openai-api-base http://localhost:8080/v1 \
-  --openai-api-key  $OPENAI_API_KEY \
-  --model gpt-4o \
-  --stream
-```
+4. **Telemetry never includes user content.** The dashboard and the
+   MCP server expose your data back to you. Nothing is sent off-machine.
 
-### Claude Code
-
-Claude Code uses the Anthropic message shape (`/v1/messages`).
-Set `ANTHROPIC_BASE_URL` before starting the CLI:
-
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:8080
-claude
-```
-
-Or add it to your shell profile so it applies automatically:
-
-```bash
-# ~/.bashrc or ~/.zshrc
-export ANTHROPIC_BASE_URL=http://localhost:8080
-```
-
-Claude Code will continue to send your Anthropic API key in the
-`x-api-key` header; the harness forwards it untouched to `api.anthropic.com`.
-
-### Cline (VS Code extension)
-
-1. Open the Cline extension settings (gear icon → "Settings").
-2. Set **API Provider** to `OpenAI Compatible`.
-3. Set **API Base URL** to `http://localhost:8080/v1`.
-4. Set **API Key** to your `OPENAI_API_KEY` (or your Anthropic key if routing through OpenAI-compat shim).
-5. Set **Model** to `gpt-4o` (or whichever model you use).
-6. Save. Cline will now route all completions through the harness.
-
-### Cursor
-
-In Cursor's settings → Models → "Override OpenAI Base URL":
-
-```
-http://localhost:8080/v1
-```
-
-Leave the API key field as-is; Cursor sends it in the `Authorization` header
-and the harness forwards it.
-
-### Local Ollama
-
-```bash
-# Point any OpenAI-compatible agent at:
-http://localhost:8080/api/chat    # Ollama chat shape
-http://localhost:8080/api/generate
-```
-
-The harness proxies to `http://localhost:11434` by default. Configure a
-different Ollama host in `harness.toml` under `[provider.ollama]`.
+5. **The Pro tier is structurally separate.** Pro code lives in a
+   different repository under a different license. This repo has
+   zero `import` statements that touch Pro code.
 
 ---
 
-## Session headers (optional)
+## Provider pricing (for the dashboard's savings calculator)
 
-The harness assigns a random `session_id` per agent process. To pin a session
-across multiple tool invocations (e.g. in a CI workflow):
-
-```
-X-Session-ID: my-ci-run-42
-X-Project-ID: my-project
-```
-
-`X-Project-ID` must match a project registered in the Memory Layer core.
-Defaults to `"default"` when absent.
+The dashboard's session-level savings columns compute against a price
+table. By default the daemon syncs the table once per day from
+[OpenRouter](https://openrouter.ai/api/v1/models). When the network is
+down or OpenRouter is unreachable, the bundled
+`memory_layer/layer3/pricing/pricing_matrix.json` provides a static
+fallback. The fallback covers the most common Claude, OpenAI, Gemini,
+DeepSeek, xAI, and Mistral models. Prices in the fallback are
+USD-per-million-tokens, last verified mid-2026.
 
 ---
 
-## Troubleshooting
+## Contributing
 
-### Connection refused on port 8080
+See [CONTRIBUTING.md](CONTRIBUTING.md). The short version: open issues
+first for non-trivial changes, run `pytest` before submitting, and keep
+the architectural commitments above intact.
 
-```
-Error: connect ECONNREFUSED 127.0.0.1:8080
-```
+## Security
 
-**Cause**: the harness is not running.
+See [SECURITY.md](SECURITY.md). Vulnerability reports go to
+`security@memstrata.dev`, **not** GitHub issues.
 
-```bash
-memory-layer-pro status   # check if running
-memory-layer-pro start    # start in foreground to see log output
-```
+## License
 
-If `start` fails immediately, check the log:
+[MIT](LICENSE). See `LICENSE` for the full text.
 
-```bash
-memory-layer-pro logs
-```
+## Related
 
-### "Memory Layer core unreachable" in the harness log
-
-```
-[Memory Layer Pro] Memory Layer core unreachable at http://localhost:8000.
-Start the core with: memory-layer api
-```
-
-**Cause**: the MIT core is not running.
-
-```bash
-# In a separate terminal (or as a service):
-memory-layer api
-```
-
-Verify the core is reachable:
-
-```bash
-curl http://localhost:8000/health
-```
-
-If you run the core on a non-default port, update `core_url` in `harness.toml`.
-
-### Upstream 401 — bad or missing API key
-
-```
-[Memory Layer Pro] Upstream returned 401 for https://api.openai.com/v1/chat/completions.
-Memory Layer Pro does not store API keys.
-Fix: check the API key in your agent's configuration, not in harness.toml.
-```
-
-**Cause**: the API key your coding agent is sending is invalid or expired.
-
-- The harness never stores or modifies API keys (see [NON_FEATURES.md](NON_FEATURES.md)).
-- Set the correct key in your agent (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.).
-- Verify it works by calling the provider directly:
-
-```bash
-curl https://api.openai.com/v1/models \
-  -H "Authorization: Bearer $OPENAI_API_KEY"
-```
-
-### Request reaches the harness but context is not injected
-
-Check the harness log for a `WARNING` or `ERROR` about the Memory Layer core.
-Common causes:
-
-| Log message | Fix |
-|-------------|-----|
-| `Memory Layer core unreachable` | Start the core (`memory-layer api`) |
-| `core rejected the API key (HTTP 401)` | Set correct `api_key` in `harness.toml` |
-| `HTTPStatusError: 5xx` | Core is running but erroring; check core logs |
-
-If the core is healthy but context is still missing, add `log_level = "debug"`
-to `harness.toml` and restart; you will see the injection decision
-(`FRESH_FULL` / `SKIP` / `APPEND_DELTA`) logged for every request.
-
-### Hash mismatch warnings in debug logs
-
-```
-InjectionMode: APPEND_DELTA (hash changed from dead0000 → abc123)
-```
-
-This is normal behaviour, not an error. The watcher detected a file change
-mid-session; the harness appended a short delta message instead of
-re-injecting the full block (Hard Rule 50 — APPEND_DELTA preserves the
-prefix cache).
-
-If you see FRESH_FULL unexpectedly on turn 3+ of a session, the session
-may have gone idle for > 1 hour and was treated as stale. This is also
-expected behaviour.
-
-### "502 Bad Gateway" response from the harness
-
-```json
-{"error": {"message": "...", "type": "connection_error"}}
-```
-
-**Cause**: the harness could not reach the upstream provider (OpenAI, Anthropic,
-or Ollama). The terminal shows:
-
-```
-[Memory Layer Pro] Could not reach upstream at https://api.openai.com/...
-Check your network connection and the upstream_url in harness.toml.
-```
-
-Check:
-1. Network connectivity to the provider.
-2. The `upstream_url` under `[provider.<name>]` in `harness.toml`.
-3. Firewall rules (corporate proxies sometimes block direct HTTPS).
-
----
-
-## Uninstall
-
-```bash
-memory-layer-pro uninstall   # remove OS service
-pipx uninstall memory-layer-pro
-```
-
-Configuration and session data in `~/.memory-layer-pro/` are not removed
-automatically; delete that directory manually if you want a clean slate.
-
----
-
-## Privacy
-
-See [NON_FEATURES.md](NON_FEATURES.md) for a precise description of what
-Memory Layer Pro does **not** do with your code, keys, or traffic.
+- **Commercial Pro tier**: [memstrata.dev](https://memstrata.dev) — the
+  token-budgeting interception harness, the money-back guarantee, and
+  the IDE extension. Proprietary, paid, separate codebase.
+- **Browser extension store listings**: shipped from the same source
+  tree in this repo; see [browser-extension/README.md](browser-extension/)
+  for build + sideload instructions.
