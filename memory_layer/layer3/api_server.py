@@ -57,19 +57,12 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Stripe setup
+# V5.2-E E.1: Stripe setup and the /webhooks/stripe registration moved
+# to ``memory_layer_pro.api_overlay`` so this Open module is entirely
+# blind to billing. Pro overlay mounts at daemon startup.
 # ---------------------------------------------------------------------------
 
-try:
-    import stripe as _stripe
-    _stripe.api_key = os.environ.get("STRIPE_SECRET_KEY", "")
-except ImportError:
-    _stripe = None  # type: ignore[assignment]
-    _logger.warning("stripe package not installed — webhook route will be unavailable")
-
-_STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
-
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -86,7 +79,6 @@ from memory_layer.layer3._db import (
 )
 from memory_layer.layer3 import retrieval as _retrieval
 from memory_layer.workers.embedding_worker import EmbeddingWorker
-from memory_layer.layer3 import feature_gate as fg
 from memory_layer.layer3.pricing.lookup import (
     get_rates,
     compute_input_savings_usd,
@@ -94,13 +86,39 @@ from memory_layer.layer3.pricing.lookup import (
     compute_output_savings_usd,
 )
 from memory_layer.layer3.pricing.openrouter_sync import sync_loop as _pricing_sync_loop
-from memory_layer.layer3.baseline.cohort import (
-    ensure_table as _ensure_baseline_table,
-    is_in_baseline_window,
-    days_remaining as _baseline_days_remaining,
-    compute_and_close_baseline,
-    get_baseline_stats,
-)
+
+
+# ---------------------------------------------------------------------------
+# V5.2-E E.1: cohort baseline dependency injection.
+#
+# The cohort baseline state machine is the "money-back guarantee"
+# integrity layer per Hard Rule 61 — Pro business logic. Open keeps a
+# NoOp default so this module is structurally blind to baselines; Pro
+# overlay (``memory_layer_pro.api_overlay``) replaces it on startup.
+# ---------------------------------------------------------------------------
+
+class _NoOpCohortApi:
+    """Open default — never in baseline, no stats. Pro overlay replaces."""
+    def ensure_table(self, conn) -> None: pass
+    def is_in_baseline_window(self, project_id: str, conn) -> bool: return False
+    def days_remaining(self, project_id: str, conn): return None
+    def compute_and_close_baseline(self, project_id: str, conn) -> None: pass
+    def get_baseline_stats(self, project_id: str, conn): return None
+
+
+_default_cohort_api: object = _NoOpCohortApi()
+
+
+def _cohort_api_for_app(app_obj: "FastAPI") -> object:
+    return getattr(app_obj.state, "cohort_api", _default_cohort_api)
+
+
+def _cohort_dep(request: Request) -> object:
+    return _cohort_api_for_app(request.app)
+
+
+CohortDep = Annotated[object, Depends(_cohort_dep)]
+
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +179,10 @@ async def lifespan(app: FastAPI):
     conn = sqlite3.connect(str(get_db_path()), check_same_thread=False)
     try:
         init_db(conn)
-        _ensure_baseline_table(conn)
+        # V5.2-E E.1 — cohort_baseline table creation moved behind the
+        # Pro overlay's cohort_api. Open's default is a no-op so the
+        # table is simply absent when the daemon runs without Pro.
+        _cohort_api_for_app(app).ensure_table(conn)
     finally:
         conn.close()
 
@@ -179,7 +200,7 @@ async def lifespan(app: FastAPI):
     # back to a 5-minute heartbeat so we still notice if Ollama dies.
     # Hard Rule 80: this MUST NOT block startup. The task is fired
     # and forgotten; the lifespan continues immediately.
-    from memory_layer_pro.ollama_health import OllamaHealth, OllamaStatus
+    from memory_layer.layer3.ollama_health import OllamaHealth, OllamaStatus
     app.state.ollama_status = OllamaHealth(
         status=OllamaStatus.UNKNOWN,
         configured_model="",
@@ -276,47 +297,8 @@ app.add_middleware(
 Conn = Annotated[sqlite3.Connection, Depends(get_conn)]
 
 
-# ---------------------------------------------------------------------------
-# Stripe webhook — POST /webhooks/stripe
-# ---------------------------------------------------------------------------
-
-class _DBCustomerMap:
-    """Dict-like wrapper: looks up user_id for a Stripe customer_id at request time."""
-
-    def get(self, customer_id: str, default=None):
-        try:
-            conn = sqlite3.connect(str(get_db_path()), check_same_thread=False)
-            row = conn.execute(
-                "SELECT user_id FROM stripe_customers WHERE customer_id = ?",
-                (customer_id,),
-            ).fetchone()
-            conn.close()
-            return row[0] if row else default
-        except Exception as exc:
-            _logger.warning("_DBCustomerMap lookup failed for %s: %s", customer_id, exc)
-            return default
-
-
-def _make_conn():
-    c = sqlite3.connect(str(get_db_path()), check_same_thread=False, timeout=10.0)
-    c.row_factory = sqlite3.Row
-    return c
-
-
-if _stripe is not None:
-    from billing.webhook import make_fastapi_webhook_route as _make_webhook_route
-    app.add_api_route(
-        "/webhooks/stripe",
-        _make_webhook_route(
-            conn_factory=_make_conn,
-            stripe_client=_stripe,
-            user_id_for_customer=_DBCustomerMap(),
-            webhook_secret=_STRIPE_WEBHOOK_SECRET,
-        ),
-        methods=["POST"],
-    )
-else:
-    _logger.warning("Stripe webhook route NOT registered (stripe package missing)")
+# V5.2-E E.1: Stripe webhook registration moved to
+# ``memory_layer_pro.api_overlay._register_stripe_webhook``.
 
 
 # ---------------------------------------------------------------------------
@@ -352,7 +334,7 @@ async def _ollama_polling_loop(app_ref) -> None:
     """
     import asyncio
     from datetime import datetime, timezone
-    from memory_layer_pro.ollama_health import (
+    from memory_layer.layer3.ollama_health import (
         OllamaStatus,
         check_ollama_async,
     )
@@ -556,7 +538,7 @@ class TurnTelemetryBody(BaseModel):
 
 
 @app.post("/telemetry/session")
-def record_turn(body: TurnTelemetryBody, conn: Conn) -> dict:
+def record_turn(body: TurnTelemetryBody, conn: Conn, cohort: CohortDep) -> dict:
     chat_session_id: str | None = None
 
     # Normalize client_source to canonical 'chat' | 'coding' so the dashboard
@@ -621,9 +603,9 @@ def record_turn(body: TurnTelemetryBody, conn: Conn) -> dict:
 
     if body.project_id:
         try:
-            in_baseline = is_in_baseline_window(body.project_id, conn)
+            in_baseline = cohort.is_in_baseline_window(body.project_id, conn)
             if not in_baseline:
-                compute_and_close_baseline(body.project_id, conn)
+                cohort.compute_and_close_baseline(body.project_id, conn)
         except Exception as exc:
             _logger.debug("baseline check failed for %s: %s", body.project_id, exc)
 
@@ -670,7 +652,7 @@ def record_turn(body: TurnTelemetryBody, conn: Conn) -> dict:
             # window and for any project that never collected a cohort.
             if body.actual_output_tokens is not None:
                 try:
-                    stats = get_baseline_stats(body.project_id, conn)
+                    stats = cohort.get_baseline_stats(body.project_id, conn)
                 except Exception:
                     stats = None
                 if stats is not None:
@@ -1150,10 +1132,12 @@ def context_for_chat(
 # ---------------------------------------------------------------------------
 
 @app.get("/baseline/status")
-def baseline_status(conn: Conn, project_id: str = Query(default="default")) -> dict:
+def baseline_status(
+    conn: Conn, cohort: CohortDep, project_id: str = Query(default="default"),
+) -> dict:
     try:
-        in_baseline = is_in_baseline_window(project_id, conn)
-        remaining = _baseline_days_remaining(project_id, conn) if in_baseline else None
+        in_baseline = cohort.is_in_baseline_window(project_id, conn)
+        remaining = cohort.days_remaining(project_id, conn) if in_baseline else None
     except Exception as exc:
         _logger.warning("baseline_status error for %s: %s", project_id, exc)
         in_baseline = False
@@ -1547,53 +1531,7 @@ h1{font-size:14px;font-weight:600;color:#e8eaf0;letter-spacing:.01em}
 .tab.active{color:#7dd3a8;border-bottom-color:#7dd3a8}
 .tab-content{display:none;padding:20px}
 .tab-content.active{display:block}
-/* ── Money sub-tabs (Chat / Coding) ── */
-#money-subtabs{display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid #1e222e}
-.mtab{padding:7px 14px;font-size:12px;font-weight:500;color:#5a6478;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;user-select:none}
-.mtab.active{color:#7dd3a8;border-bottom-color:#7dd3a8}
-.mtab-panel{display:none}
-.mtab-panel.active{display:block}
-/* ── Money hero / cards ── */
-.money-hero{background:linear-gradient(135deg,#064e3b,#065f46);border-radius:12px;padding:20px 24px;margin-bottom:20px;display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
-.money-total{font-size:36px;font-weight:700;color:#6ee7b7;line-height:1}
-.money-label{font-size:12px;color:#a7f3d0;margin-top:4px}
-.money-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:20px}
-.money-card{background:#161b24;border:1px solid #222733;border-radius:8px;padding:14px 16px}
-.mc-val{font-size:22px;font-weight:600;color:#7dd3a8}
-.mc-lbl{font-size:11px;color:#5a6478;margin-top:3px}
-.mc-sub{font-size:10px;color:#3a4458;margin-top:2px}
-/* ── Stripe progress bar ── */
-.stripe-bar-wrap{background:#161b24;border:1px solid #222733;border-radius:8px;padding:14px 16px;margin-bottom:20px}
-.stripe-bar-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.stripe-bar-title{font-size:12px;color:#9ca3af;font-weight:500}
-.stripe-bar-pct{font-size:12px;color:#7dd3a8;font-weight:600}
-.stripe-track{background:#1e2330;border-radius:9999px;height:8px;overflow:hidden}
-.stripe-fill{background:linear-gradient(90deg,#059669,#10b981);border-radius:9999px;height:100%;transition:width .6s ease}
-.stripe-bar-footer{display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:#4e5570}
-/* ── Filter toolbar ── */
-.filter-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0 10px;padding:9px 10px;background:#13171f;border:1px solid #1e2330;border-radius:7px}
-.filter-bar label{font-size:10px;color:#4e5570;text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-right:4px}
-.filter-bar input,.filter-bar select{background:#0f1218;border:1px solid #222733;color:#c8d0da;font-size:12px;padding:5px 8px;border-radius:5px;outline:none;font-family:inherit}
-.filter-bar input:focus,.filter-bar select:focus{border-color:#3a4a6e}
-.filter-bar input[type=search]{width:170px}
-.filter-bar input[type=number]{width:64px}
-.filter-bar select{min-width:100px;max-width:170px}
-.filter-bar .fb-spacer{flex:1}
-.filter-bar .fb-count{font-size:11px;color:#5a6478}
-.filter-bar .fb-reset{background:#1a1e2c;border:1px solid #2a3050;color:#7080a0;cursor:pointer;font-size:11px;padding:5px 10px;border-radius:5px;font-weight:500}
-.filter-bar .fb-reset:hover{background:#222842;color:#9ca3af}
-/* ── Session table ── */
-.sess-table{width:100%;border-collapse:collapse}
-.sess-table th{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#4e5570;padding:6px 10px;text-align:left;border-bottom:1px solid #1e2330}
-.sess-table th[data-sortkey]{cursor:pointer;user-select:none}
-.sess-table th[data-sortkey]:hover{color:#9ca3af}
-.sess-table th.sort-asc::after{content:" \\25B2";color:#7dd3a8}
-.sess-table th.sort-desc::after{content:" \\25BC";color:#7dd3a8}
-.sess-table td{padding:8px 10px;border-bottom:1px solid #13171f;font-size:12px;vertical-align:middle}
-.sess-table tr:hover td{background:#13171f}
-.usd-pos{color:#7dd3a8;font-weight:600}
-.usd-zero{color:#3a4458}
-.prov-badge{display:inline-block;padding:1px 7px;border-radius:9999px;font-size:10px;font-weight:500;background:#1a1e2c;color:#7080a0}
+/* PRO_MONEY_TAB_CSS */
 /* ── Now tab ── */
 .now-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:20px}
 .now-card{background:#161b24;border:1px solid #222733;border-radius:8px;padding:14px 16px}
@@ -1631,130 +1569,15 @@ h1{font-size:14px;font-weight:600;color:#e8eaf0;letter-spacing:.01em}
   <span id="ts">Loading…</span>
 </header>
 <div id="tabs">
-  <span class="tab active" data-tab="money">Money</span>
+  <!-- PRO_MONEY_TAB_NAV -->
   <span class="tab" data-tab="now">Now</span>
   <span class="tab" data-tab="quality">Quality</span>
 </div>
 
-<!-- ── Money tab ── -->
-<div id="tab-money" class="tab-content active">
-
-  <!-- Chat / Coding sub-tabs -->
-  <div id="money-subtabs">
-    <span class="mtab active" data-mtab="chat">Chat</span>
-    <span class="mtab" id="mtab-coding" data-mtab="coding">Coding</span>
-  </div>
-
-  <!-- Chat sub-panel -->
-  <div id="mpanel-chat" class="mtab-panel active">
-    <div class="money-hero">
-      <div>
-        <div class="money-total" id="mc-total">$0.00</div>
-        <div class="money-label">browser extension savings</div>
-      </div>
-      <div id="mc-status" style="font-size:12px;color:#a7f3d0;text-align:right"></div>
-    </div>
-    <div class="money-cards">
-      <div class="money-card"><div class="mc-val" id="mc-input">$0.00</div><div class="mc-lbl">Input savings</div><div class="mc-sub">baseline vs. actual input tokens</div></div>
-      <div class="money-card"><div class="mc-val" id="mc-cache">$0.00</div><div class="mc-lbl">Cache savings</div><div class="mc-sub">KV cache hits</div></div>
-      <div class="money-card"><div class="mc-val" id="mc-output">$0.00</div><div class="mc-lbl">Output savings</div><div class="mc-sub">turns avoided via context reuse</div></div>
-    </div>
-    <div class="stripe-bar-wrap">
-      <div class="stripe-bar-header"><span class="stripe-bar-title">Subscription progress (Chat)</span><span class="stripe-bar-pct" id="mc-bar-pct">0%</span></div>
-      <div class="stripe-track"><div class="stripe-fill" id="mc-bar-fill" style="width:0%"></div></div>
-      <div class="stripe-bar-footer"><span id="mc-bar-saved">$0.00 saved</span><span id="mc-bar-goal">$15.00 goal</span></div>
-    </div>
-    <div class="section-title">Chat sessions</div>
-    <div class="filter-bar" data-panel="chat">
-      <label>Search</label>
-      <input type="search" data-filt="q" placeholder="session id\\u2026">
-      <label>Provider</label>
-      <select data-filt="provider"><option value="">All</option></select>
-      <label>Min turns</label>
-      <input type="number" data-filt="minTurns" min="0" placeholder="0">
-      <label>Window</label>
-      <select data-filt="window">
-        <option value="all">All time</option>
-        <option value="24h">Last 24h</option>
-        <option value="7d">Last 7d</option>
-        <option value="30d">Last 30d</option>
-      </select>
-      <button class="fb-reset" data-filt="reset">Reset</button>
-      <span class="fb-spacer"></span>
-      <span class="fb-count" id="mc-count">0 sessions</span>
-    </div>
-    <table class="sess-table" id="mc-table">
-      <thead><tr>
-        <th data-sortkey="external_session_id">Session</th>
-        <th data-sortkey="provider_id">Provider</th>
-        <th data-sortkey="turn_count">Turns</th>
-        <th data-sortkey="input_saved_usd">Input saved</th>
-        <th data-sortkey="cache_saved_usd">Cache saved</th>
-        <th data-sortkey="output_saved_usd">Output saved</th>
-        <th data-sortkey="_total">Total</th>
-        <th data-sortkey="last_seen" class="sort-desc">Last seen</th>
-      </tr></thead>
-      <tbody id="mc-tbody"><tr><td colspan="8" style="color:#3a4458;padding:16px 10px">No chat sessions yet.</td></tr></tbody>
-    </table>
-  </div>
-
-  <!-- Coding sub-panel -->
-  <div id="mpanel-coding" class="mtab-panel">
-    <div class="money-hero" style="background:linear-gradient(135deg,#1e1a36,#2a2060)">
-      <div>
-        <div class="money-total" id="mcd-total">$0.00</div>
-        <div class="money-label">harness / IDE savings</div>
-      </div>
-      <div id="mcd-status" style="font-size:12px;color:#c4b5fd;text-align:right"></div>
-    </div>
-    <div class="money-cards">
-      <div class="money-card"><div class="mc-val" id="mcd-input">$0.00</div><div class="mc-lbl">Input savings</div><div class="mc-sub">baseline vs. actual input tokens</div></div>
-      <div class="money-card"><div class="mc-val" id="mcd-cache">$0.00</div><div class="mc-lbl">Cache savings</div><div class="mc-sub">KV cache hits</div></div>
-      <div class="money-card"><div class="mc-val" id="mcd-output">$0.00</div><div class="mc-lbl">Output savings</div><div class="mc-sub">turns avoided via context reuse</div></div>
-    </div>
-    <div class="stripe-bar-wrap">
-      <div class="stripe-bar-header"><span class="stripe-bar-title">Subscription progress (Combined)</span><span class="stripe-bar-pct" id="mcd-bar-pct">0%</span></div>
-      <div class="stripe-track"><div class="stripe-fill" id="mcd-bar-fill" style="width:0%"></div></div>
-      <div class="stripe-bar-footer"><span id="mcd-bar-saved">$0.00 saved</span><span id="mcd-bar-goal">$15.00 goal</span></div>
-    </div>
-    <div class="section-title">Harness / IDE sessions</div>
-    <div class="filter-bar" data-panel="coding">
-      <label>Search</label>
-      <input type="search" data-filt="q" placeholder="session id\\u2026">
-      <label>Provider</label>
-      <select data-filt="provider"><option value="">All</option></select>
-      <label>Min turns</label>
-      <input type="number" data-filt="minTurns" min="0" placeholder="0">
-      <label>Window</label>
-      <select data-filt="window">
-        <option value="all">All time</option>
-        <option value="24h">Last 24h</option>
-        <option value="7d">Last 7d</option>
-        <option value="30d">Last 30d</option>
-      </select>
-      <button class="fb-reset" data-filt="reset">Reset</button>
-      <span class="fb-spacer"></span>
-      <span class="fb-count" id="mcd-count">0 sessions</span>
-    </div>
-    <table class="sess-table" id="mcd-table">
-      <thead><tr>
-        <th data-sortkey="external_session_id">Session</th>
-        <th data-sortkey="provider_id">Provider</th>
-        <th data-sortkey="turn_count">Turns</th>
-        <th data-sortkey="input_saved_usd">Input saved</th>
-        <th data-sortkey="cache_saved_usd">Cache saved</th>
-        <th data-sortkey="output_saved_usd">Output saved</th>
-        <th data-sortkey="_total">Total</th>
-        <th data-sortkey="last_seen" class="sort-desc">Last seen</th>
-      </tr></thead>
-      <tbody id="mcd-tbody"><tr><td colspan="8" style="color:#3a4458;padding:16px 10px">No coding sessions yet.</td></tr></tbody>
-    </table>
-  </div>
-
-</div><!-- /tab-money -->
+<!-- PRO_MONEY_TAB_BODY -->
 
 <!-- ── Now tab ── -->
-<div id="tab-now" class="tab-content">
+<div id="tab-now" class="tab-content active">
   <div class="now-grid">
     <div class="now-card"><div class="now-val" id="n-sessions">0</div><div class="now-lbl">total sessions</div></div>
     <div class="now-card"><div class="now-val" id="n-turns">0</div><div class="now-lbl">total turns</div></div>
@@ -1782,11 +1605,10 @@ h1{font-size:14px;font-weight:600;color:#e8eaf0;letter-spacing:.01em}
 var _state={};
 var _sessions=[];
 var _plan={plan:'free',features:[]};
-var _activeTab=location.hash.replace(/^#\\//,'') || 'money';
-var _activeMtab='chat';
-var SUBSCRIPTION_USD=15.00;
+var _activeTab=location.hash.replace(/^#\\//,'') || 'now';
+/* PRO_MONEY_TAB_JS_INIT */
 
-function usd(v){return'$'+(v||0).toFixed(2)}
+/* PRO_MONEY_TAB_JS_USD */
 function fmt(n){if(n==null)return'–';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(1)+'K';return''+n}
 // SQLite emits 'YYYY-MM-DD HH:MM:SS' UTC with no zone marker, which JS Date
 // parses as LOCAL time → every row reads as future ("just now") west of UTC.
@@ -1807,206 +1629,7 @@ document.getElementById('tabs').addEventListener('click',function(e){
   var t=e.target.closest?e.target.closest('[data-tab]'):null;
   if(t)switchTab(t.getAttribute('data-tab'));
 });
-// ── Money sub-tab routing ──────────────────────────────────────────────────
-function switchMtab(mtab){
-  _activeMtab=mtab;
-  document.querySelectorAll('.mtab').forEach(function(t){t.classList.toggle('active',t.dataset.mtab===mtab)});
-  document.querySelectorAll('.mtab-panel').forEach(function(p){p.classList.toggle('active',p.id==='mpanel-'+mtab)});
-}
-document.getElementById('money-subtabs').addEventListener('click',function(e){
-  var t=e.target.closest?e.target.closest('[data-mtab]'):null;
-  if(t&&!t.classList.contains('hidden'))switchMtab(t.getAttribute('data-mtab'));
-});
-
-// ── Plan gating ───────────────────────────────────────────────────────────
-function applyPlanGating(){
-  var badge=document.getElementById('tier-badge');
-  badge.textContent=_plan.plan;
-  badge.className='tier-badge tier-'+_plan.plan;
-  // Hide Coding sub-tab for money_tab_chat_only (Lite plan)
-  var chatOnly=hasFeat('money_tab_chat_only')&&!hasFeat('money_tab');
-  var codingTab=document.getElementById('mtab-coding');
-  if(chatOnly){
-    codingTab.classList.add('hidden');
-    codingTab.style.display='none';
-    if(_activeMtab==='coding')switchMtab('chat');
-  }else{
-    codingTab.classList.remove('hidden');
-    codingTab.style.display='';
-  }
-}
-
-// ── Filter + sort state (per sub-tab) ───────────────────────────────────────
-// q: substring match on session id; provider: exact match (empty = all);
-// minTurns: numeric floor; window: 'all' | '24h' | '7d' | '30d';
-// sortKey: column key (see <th data-sortkey>); sortDir: 'asc' | 'desc'.
-// Cached per-panel so switching tabs doesn't lose user state.
-var _filt={
-  chat:  {q:'',provider:'',minTurns:0,window:'all',sortKey:'last_seen',sortDir:'desc'},
-  coding:{q:'',provider:'',minTurns:0,window:'all',sortKey:'last_seen',sortDir:'desc'}
-};
-var _WINDOW_MS={'24h':86400000,'7d':604800000,'30d':2592000000};
-
-function sessTotal(s){return(s.input_saved_usd||0)+(s.cache_saved_usd||0)+(s.output_saved_usd||0)}
-
-function applyFilter(sessions,f){
-  var nowMs=Date.now(),winMs=_WINDOW_MS[f.window]||0;
-  var q=(f.q||'').toLowerCase();
-  return sessions.filter(function(s){
-    if(f.provider&&s.provider_id!==f.provider)return false;
-    if(f.minTurns&&(s.turn_count||0)<f.minTurns)return false;
-    if(winMs){var t=parseTs(s.last_seen);if(isNaN(t)||(nowMs-t)>winMs)return false}
-    if(q){var sid=((s.external_session_id||s.chat_session_id)||'').toLowerCase();if(sid.indexOf(q)<0)return false}
-    return true;
-  });
-}
-
-function sortKeyValue(s,k){
-  if(k==='_total')return sessTotal(s);
-  if(k==='last_seen')return parseTs(s.last_seen)||0;
-  if(k==='external_session_id')return((s.external_session_id||s.chat_session_id)||'').toLowerCase();
-  if(k==='provider_id')return(s.provider_id||'').toLowerCase();
-  var v=s[k];return typeof v==='number'?v:(v||0);
-}
-
-function applySort(sessions,key,dir){
-  var mul=dir==='asc'?1:-1;
-  return sessions.slice().sort(function(a,b){
-    var va=sortKeyValue(a,key),vb=sortKeyValue(b,key);
-    if(va<vb)return-1*mul;if(va>vb)return 1*mul;return 0;
-  });
-}
-
-function sessRowsHtml(sessions){
-  if(!sessions.length)return'<tr><td colspan="8" style="color:#3a4458;padding:16px 10px">No sessions match these filters.</td></tr>';
-  return sessions.map(function(s){
-    var stot=sessTotal(s);
-    return'<tr>'
-      +'<td style="font-family:ui-monospace,monospace;font-size:11px;color:#8aa4c0" title="'+(s.external_session_id||s.chat_session_id||'')+'">'+abbr(s.external_session_id||s.chat_session_id)+'</td>'
-      +'<td><span class="prov-badge">'+(s.provider_id||'harness')+'</span></td>'
-      +'<td style="color:#9ca3af">'+(s.turn_count||0)+'</td>'
-      +'<td class="'+(s.input_saved_usd>0?'usd-pos':'usd-zero')+'">'+usd(s.input_saved_usd)+'</td>'
-      +'<td class="'+(s.cache_saved_usd>0?'usd-pos':'usd-zero')+'">'+usd(s.cache_saved_usd)+'</td>'
-      +'<td class="'+(s.output_saved_usd>0?'usd-pos':'usd-zero')+'">'+usd(s.output_saved_usd)+'</td>'
-      +'<td class="'+(stot>0?'usd-pos':'usd-zero')+'">'+usd(stot)+'</td>'
-      +'<td style="color:#3e4a5e">'+rel(s.last_seen)+'</td>'
-      +'</tr>';
-  }).join('');
-}
-
-// Refresh a single panel's table without re-fetching from the server.
-// Called on every filter/sort change AND after each /api/dashboard/sessions load.
-function renderPanelTable(panel){
-  var f=_filt[panel];
-  var source=panel==='chat'?function(x){return x.source?x.source==='chat':x.chat_session_id!=null}
-                            :function(x){return x.source?x.source==='coding':x.chat_session_id==null};
-  var pool=_sessions.filter(source);
-  var filtered=applyFilter(pool,f);
-  var sorted=applySort(filtered,f.sortKey,f.sortDir);
-  var tbody=document.getElementById(panel==='chat'?'mc-tbody':'mcd-tbody');
-  tbody.innerHTML=sessRowsHtml(sorted);
-  var ctr=document.getElementById(panel==='chat'?'mc-count':'mcd-count');
-  if(ctr)ctr.textContent=sorted.length+(sorted.length===pool.length?' sessions':' of '+pool.length+' sessions');
-  // Sync sort indicators on the header.
-  var table=document.getElementById(panel==='chat'?'mc-table':'mcd-table');
-  table.querySelectorAll('th[data-sortkey]').forEach(function(th){
-    th.classList.remove('sort-asc','sort-desc');
-    if(th.getAttribute('data-sortkey')===f.sortKey)th.classList.add(f.sortDir==='asc'?'sort-asc':'sort-desc');
-  });
-}
-
-// Populate the provider <select> options from the data, preserving selection.
-function refreshProviderDropdown(panel){
-  var sel=document.querySelector('[data-panel="'+panel+'"] [data-filt="provider"]');
-  if(!sel)return;
-  var cur=_filt[panel].provider;
-  var source=panel==='chat'?function(x){return x.source?x.source==='chat':x.chat_session_id!=null}
-                            :function(x){return x.source?x.source==='coding':x.chat_session_id==null};
-  var provs={};_sessions.filter(source).forEach(function(s){if(s.provider_id)provs[s.provider_id]=true});
-  var opts=['<option value="">All</option>'].concat(
-    Object.keys(provs).sort().map(function(p){return'<option value="'+p+'"'+(p===cur?' selected':'')+'>'+p+'</option>'}));
-  sel.innerHTML=opts.join('');
-}
-
-// Wire up every filter input + sortable header inside a .filter-bar / table.
-// Called once on page load; the listeners survive re-renders.
-function wireFilterBar(panel){
-  var bar=document.querySelector('.filter-bar[data-panel="'+panel+'"]');
-  if(!bar)return;
-  bar.addEventListener('input',function(e){
-    var t=e.target;var k=t.getAttribute('data-filt');if(!k||k==='reset')return;
-    var v=t.value;
-    if(k==='minTurns')v=parseInt(v,10)||0;
-    _filt[panel][k]=v;
-    renderPanelTable(panel);
-  });
-  bar.addEventListener('change',function(e){
-    var t=e.target;var k=t.getAttribute('data-filt');if(!k||k==='reset')return;
-    _filt[panel][k]=t.value;
-    renderPanelTable(panel);
-  });
-  bar.addEventListener('click',function(e){
-    if(e.target.getAttribute('data-filt')==='reset'){
-      _filt[panel]={q:'',provider:'',minTurns:0,window:'all',sortKey:'last_seen',sortDir:'desc'};
-      bar.querySelector('[data-filt="q"]').value='';
-      bar.querySelector('[data-filt="minTurns"]').value='';
-      bar.querySelector('[data-filt="provider"]').value='';
-      bar.querySelector('[data-filt="window"]').value='all';
-      renderPanelTable(panel);
-    }
-  });
-  var table=document.getElementById(panel==='chat'?'mc-table':'mcd-table');
-  table.querySelector('thead').addEventListener('click',function(e){
-    var th=e.target.closest('th[data-sortkey]');if(!th)return;
-    var k=th.getAttribute('data-sortkey');
-    if(_filt[panel].sortKey===k){
-      _filt[panel].sortDir=_filt[panel].sortDir==='asc'?'desc':'asc';
-    }else{
-      _filt[panel].sortKey=k;
-      // Default direction: text columns ascending, numeric/date descending.
-      _filt[panel].sortDir=(k==='external_session_id'||k==='provider_id')?'asc':'desc';
-    }
-    renderPanelTable(panel);
-  });
-}
-
-function renderBar(pct,barId,fillId,savedId,goalId,savedAmt,goalAmt){
-  document.getElementById(barId).textContent=Math.min(100,Math.round(pct))+'%';
-  document.getElementById(fillId).style.width=Math.min(100,Math.round(pct))+'%';
-  document.getElementById(savedId).textContent=usd(savedAmt)+' saved';
-  document.getElementById(goalId).textContent=usd(goalAmt)+' goal';
-}
-
-function renderMoney(s,sessions){
-  // Chat panel summary cards + progress bar
-  var ci=s.chat_input_saved_usd||0,cc=s.chat_cache_saved_usd||0,co=s.chat_output_saved_usd||0,ct=s.chat_saved_usd||0;
-  document.getElementById('mc-total').textContent=usd(ct);
-  document.getElementById('mc-input').textContent=usd(ci);
-  document.getElementById('mc-cache').textContent=usd(cc);
-  document.getElementById('mc-output').textContent=usd(co);
-  renderBar(ct/SUBSCRIPTION_USD*100,'mc-bar-pct','mc-bar-fill','mc-bar-saved','mc-bar-goal',ct,SUBSCRIPTION_USD);
-  var chatShortfall=SUBSCRIPTION_USD-ct;
-  document.getElementById('mc-status').textContent=chatShortfall>0?usd(chatShortfall)+' shortfall':'On track \\u2713';
-
-  // Coding panel summary cards + progress bar
-  var di=s.coding_input_saved_usd||0,dc=s.coding_cache_saved_usd||0,dout=s.coding_output_saved_usd||0,dt=s.coding_saved_usd||0;
-  document.getElementById('mcd-total').textContent=usd(dt);
-  document.getElementById('mcd-input').textContent=usd(di);
-  document.getElementById('mcd-cache').textContent=usd(dc);
-  document.getElementById('mcd-output').textContent=usd(dout);
-  var combinedTotal=(s.total_saved_usd||0);
-  renderBar(combinedTotal/SUBSCRIPTION_USD*100,'mcd-bar-pct','mcd-bar-fill','mcd-bar-saved','mcd-bar-goal',combinedTotal,SUBSCRIPTION_USD);
-  var codingShortfall=SUBSCRIPTION_USD-dt;
-  document.getElementById('mcd-status').textContent=codingShortfall>0?usd(codingShortfall)+' shortfall':'On track \\u2713';
-
-  // Refresh the provider dropdowns from the new data, then re-render tables
-  // using the persisted per-panel filter+sort state.
-  refreshProviderDropdown('chat');
-  refreshProviderDropdown('coding');
-  renderPanelTable('chat');
-  renderPanelTable('coding');
-}
-
+/* PRO_MONEY_TAB_JS_BLOCK1 */
 function renderNow(s,sessions){
   document.getElementById('n-sessions').textContent=s.sessions||0;
   document.getElementById('n-turns').textContent=s.turns||0;
@@ -2043,13 +1666,7 @@ function renderQuality(s){
   document.getElementById('q-tok-saved').textContent=fmt(s.total_tokens_saved_est||0);
 }
 
-async function loadPlan(){
-  try{
-    var r=await fetch('/license/plan-features');
-    if(r.ok)_plan=await r.json();
-  }catch{}
-  applyPlanGating();
-}
+/* PRO_MONEY_TAB_JS_LOADPLAN */
 
 async function load(){
   try{
@@ -2057,7 +1674,7 @@ async function load(){
     if(!results[0].ok||!results[1].ok)throw new Error();
     _state=await results[0].json();
     _sessions=(await results[1].json()).sessions||[];
-    renderMoney(_state,_sessions);
+    if(typeof renderMoney==='function')renderMoney(_state,_sessions);
     renderNow(_state,_sessions);
     renderQuality(_state);
     document.getElementById('err').style.display='none';
@@ -2070,9 +1687,7 @@ async function load(){
 }
 
 switchTab(_activeTab);
-wireFilterBar('chat');
-wireFilterBar('coding');
-loadPlan();
+/* PRO_MONEY_TAB_JS_RENDER */
 load();
 setInterval(load,30000);
 </script>
@@ -2081,9 +1696,33 @@ setInterval(load,30000);
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard() -> str:
-    """Local dashboard UI — groups telemetry turns by chat_session_id."""
-    return _DASHBOARD_HTML
+def dashboard(request: Request) -> str:
+    """Local dashboard UI — groups telemetry turns by chat_session_id.
+
+    V5.2-E E.1 — the dashboard template carries placeholder markers
+    (``/* PRO_MONEY_TAB_CSS */``, ``<!-- PRO_MONEY_TAB_BODY -->``, etc.)
+    where Pro money-tab content goes. When the Pro overlay is mounted
+    (``memory_layer_pro.api_overlay.mount``), ``app.state.dashboard_extras``
+    holds the substitution map and we replace each marker with its Pro
+    value. When the overlay isn't mounted (post-split Open running alone),
+    the markers stay as inert HTML/JS comments and the page renders with
+    only the Now + Quality tabs.
+
+    V5.2-F — live USDCAD FX substitution into the Pro Money-tab init
+    block is the Pro overlay's responsibility (it provides a callable
+    in the extras map). Open has no FX awareness.
+    """
+    extras = getattr(request.app.state, "dashboard_extras", None) or {}
+    html = _DASHBOARD_HTML
+    for marker, value in extras.items():
+        if callable(value):
+            try:
+                value = value()
+            except Exception as exc:                          # noqa: BLE001
+                _logger.warning("dashboard_extras[%r] callable raised: %s", marker, exc)
+                continue
+        html = html.replace(marker, value)
+    return html
 
 
 # ---------------------------------------------------------------------------
@@ -2348,43 +1987,9 @@ def delete_all_memory(conn: Conn) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Phase 33 — License / plan-feature endpoints
-# ---------------------------------------------------------------------------
-
-class SetPlanBody(BaseModel):
-    plan: str
-
-
-@app.get("/license/current-plan")
-def get_current_plan(conn: Conn) -> dict:
-    """Return the active plan name stored in settings."""
-    plan = fg.get_current_plan(conn)
-    return {"plan": plan}
-
-
-@app.get("/license/plan-features")
-def get_plan_features(conn: Conn) -> dict:
-    """Return the feature flags enabled for the current plan.
-
-    Consumed by:
-    - harness MemoryLayerClient.is_feature_active()
-    - browser extension FeatureGate
-    - VS Code extension (future)
-    """
-    plan = fg.get_current_plan(conn)
-    features = fg.get_plan_features(conn, plan)
-    return {"plan": plan, "features": features}
-
-
-@app.post("/license/set-plan")
-def set_plan(body: SetPlanBody, conn: Conn) -> dict:
-    """Set the active plan. Called by the Stripe webhook on subscription change."""
-    try:
-        fg.set_current_plan(conn, body.plan)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"plan": body.plan, "features": fg.get_plan_features(conn, body.plan)}
+# V5.2-E E.1: Phase 33 License / plan-feature endpoints
+# (/license/current-plan, /license/plan-features, /license/set-plan)
+# moved to ``memory_layer_pro.api_overlay._register_license_routes``.
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,8 @@
 
 Schema combines the base tables with migration 011 (V5.4 chat sessions) so the
 server can be started against a fresh database without running separate migration
-scripts.  The billing conftest already mirrors this schema for financial tests.
+scripts. Plan-tier and Stripe-linkage tables are created by Pro overlay's
+``memory_layer_pro.pro_schema`` per the V5.2-E E.1 untangling.
 
 DB path resolution order:
   1. ML_DB_PATH environment variable  (used for test isolation)
@@ -159,36 +160,16 @@ CREATE TABLE IF NOT EXISTS provider_pricing (
     PRIMARY KEY (provider, model)
 );
 
--- Phase 33: two-tier billing — plan feature flags
-CREATE TABLE IF NOT EXISTS plan_features (
-    plan     TEXT PRIMARY KEY,
-    features TEXT NOT NULL  -- JSON array of feature flag strings
-);
-
-INSERT OR IGNORE INTO plan_features VALUES
-  ('free',  '["mcp_server", "local_dashboard"]'),
-  ('trial', '["mcp_server", "local_dashboard", "browser_ext", "harness", "vscode_ext", "money_tab"]'),
-  ('lite',  '["mcp_server", "local_dashboard", "browser_ext", "money_tab_chat_only"]'),
-  ('pro',   '["mcp_server", "local_dashboard", "browser_ext", "harness", "vscode_ext", "money_tab"]'),
-  ('team',  '["mcp_server", "local_dashboard", "browser_ext", "harness", "vscode_ext", "money_tab", "team_sync", "shared_dashboard"]');
-
--- Persisted settings (key-value). current_plan defaults to 'trial' for all
--- existing users so they retain full access while the billing rollout happens.
+-- Persisted settings (key-value). Open core uses this as a generic
+-- store; Pro overlay seeds 'current_plan' for plan-tier gating.
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
--- Phase 23: maps Stripe customer_id → internal user_id.
--- Populated on checkout.session.completed; consumed by the invoice.upcoming webhook.
-CREATE TABLE IF NOT EXISTS stripe_customers (
-    customer_id TEXT PRIMARY KEY,
-    user_id     TEXT NOT NULL,
-    plan        TEXT NOT NULL DEFAULT 'pro',
-    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-INSERT OR IGNORE INTO settings (key, value) VALUES ('current_plan', 'trial');
+-- V5.2-E E.1: the Pro tables (`plan_features`, `stripe_customers`) and
+-- the `current_plan` settings seed previously lived here. They moved to
+-- `memory_layer_pro/pro_schema.py`, applied at Pro overlay mount time.
 """
 
 
