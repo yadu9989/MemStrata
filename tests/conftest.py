@@ -23,9 +23,21 @@ Two cross-cutting jobs handled here:
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 
 import pytest
+
+# CI fix: disable the OpenRouter pricing-sync background task in tests.
+# It spawns a worker thread via ``asyncio.to_thread`` that can't be
+# cancelled mid-execution; when the next TestClient setup closes the
+# SQLite connection while a prior thread is still in conn.executemany,
+# we get a segfault (Ubuntu cp310 / Windows cp310 + cp311 access
+# violation in CI). The daemon's static pricing_matrix.json fallback
+# covers tests; live OpenRouter rates aren't needed.
+#
+# setdefault so the test runner respects an explicit override.
+os.environ.setdefault("MEMSTRATA_DISABLE_PRICING_SYNC", "1")
 
 
 def _sqlite_vec_loads() -> bool:

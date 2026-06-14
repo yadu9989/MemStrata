@@ -191,7 +191,22 @@ async def lifespan(app: FastAPI):
         return c
 
     import asyncio
-    task = asyncio.create_task(_pricing_sync_loop(_conn_factory))
+    # V5.2-E CI fix: the OpenRouter pricing sync runs the network fetch +
+    # SQLite write inside ``asyncio.to_thread(...)``. Threads spawned by
+    # to_thread() cannot be cancelled mid-execution. In tests, every
+    # TestClient enters/exits the lifespan; threads from prior
+    # invocations are still mid-INSERT against the same SQLite path when
+    # the next test's setup closes the connection — race condition,
+    # segfault during fixture teardown (seen on Ubuntu cp310 and Windows
+    # cp310/cp311). Skip the background sync when
+    # MEMSTRATA_DISABLE_PRICING_SYNC=1 (set in tests/conftest.py). The
+    # daemon still has the static pricing_matrix.json fallback, so
+    # tests get pricing data; live OpenRouter rates only matter for the
+    # dashboard's savings calculator in production.
+    if os.environ.get("MEMSTRATA_DISABLE_PRICING_SYNC") == "1":
+        task = None
+    else:
+        task = asyncio.create_task(_pricing_sync_loop(_conn_factory))
 
     # V5.2-C Phase C.2 — Ollama health polling task.
     # Initializes app.state.ollama_status to UNKNOWN, then polls
@@ -264,11 +279,12 @@ async def lifespan(app: FastAPI):
                 except Exception as exc:                  # noqa: BLE001
                     _logger.debug("ingestion: shutdown raised: %s", exc)
             worker.stop()
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
             # V5.2-C Phase C.2 — cancel the Ollama polling task last
             # (cheap; just a sleep loop). Mirrors the pricing-sync
             # shutdown pattern above.
