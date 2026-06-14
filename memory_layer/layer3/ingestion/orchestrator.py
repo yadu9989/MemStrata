@@ -26,9 +26,10 @@ import logging
 import sqlite3
 import time
 import uuid
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional, Protocol
+from typing import Optional, Protocol
 
 from memory_layer.layer3.ingestion.chunker import (
     Chunk,
@@ -83,10 +84,10 @@ class JobState:
     files_processed: int
     entities_total: int
     entities_embedded: int
-    last_processed_file: Optional[str]
+    last_processed_file: str | None
     started_at: str
-    completed_at: Optional[str] = None
-    error: Optional[str] = None
+    completed_at: str | None = None
+    error: str | None = None
 
 
 # ── Errors ────────────────────────────────────────────────────────────────
@@ -139,11 +140,11 @@ class BackfillOrchestrator:
         *,
         project_id: str,
         project_path: str | Path,
-        embedder: Optional[Embedder] = None,
+        embedder: Embedder | None = None,
         clock: Callable[[], float] = time.time,
-        skip_policy: Optional[ProjectSkipPolicy] = None,
-        resource_policy: Optional[ResourcePolicy] = None,
-        control_state: Optional[ControlState] = None,
+        skip_policy: ProjectSkipPolicy | None = None,
+        resource_policy: ResourcePolicy | None = None,
+        control_state: ControlState | None = None,
         respect_gitignore: bool = True,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -152,8 +153,8 @@ class BackfillOrchestrator:
         self.project_path = str(Path(project_path).resolve())
         self.embedder: Embedder = embedder or NoOpEmbedder()
         self.clock = clock
-        self._abort_after_phase: Optional[str] = None     # test seam — see _maybe_abort
-        self._abort_after_batches: Optional[int] = None
+        self._abort_after_phase: str | None = None     # test seam — see _maybe_abort
+        self._abort_after_batches: int | None = None
         self._batches_processed = 0
         # V5.2-A Phase 35.5: full denylist + gitignore replace the
         # interim _BASE_DENY_DIRS check used by Phase 35.2.
@@ -203,7 +204,7 @@ class BackfillOrchestrator:
             state = self._phase_verify(state)
         return state
 
-    def current_state(self) -> Optional[JobState]:
+    def current_state(self) -> JobState | None:
         return self._load_state()
 
     def pause(self) -> None:
@@ -228,7 +229,7 @@ class BackfillOrchestrator:
 
     # ── Test seam ──────────────────────────────────────────────────────
 
-    def abort_after(self, phase: str, *, batches: Optional[int] = None) -> None:
+    def abort_after(self, phase: str, *, batches: int | None = None) -> None:
         """Test hook: raise ``RuntimeError('test-abort')`` partway through.
 
         Only used in pytest. Production callers never touch this.
@@ -374,7 +375,7 @@ class BackfillOrchestrator:
         return inserted
 
     @staticmethod
-    def _hash_file(path: str) -> Optional[str]:
+    def _hash_file(path: str) -> str | None:
         try:
             with open(path, "rb") as f:
                 h = hashlib.sha256()
@@ -567,7 +568,7 @@ class BackfillOrchestrator:
         assert loaded is not None
         return loaded
 
-    def _load_state(self) -> Optional[JobState]:
+    def _load_state(self) -> JobState | None:
         row = self.conn.execute(
             """
             SELECT id, project_id, project_path, phase, files_total,
@@ -626,8 +627,8 @@ def record_opt_in(
     project_path: str | Path,
     *,
     state: str = "opted_in",
-    user_added_dirs: Optional[list[str]] = None,
-    user_excluded_dirs: Optional[list[str]] = None,
+    user_added_dirs: list[str] | None = None,
+    user_excluded_dirs: list[str] | None = None,
 ) -> None:
     """Write the Hard Rule 70 gate row.
 

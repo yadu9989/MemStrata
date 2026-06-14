@@ -8,9 +8,9 @@ and a backgrounded invocation.
 import pytest
 
 from memory_layer.cli.cd_hook import (
-    hook_for_shell,
     _HOOK_MARKER_BEGIN,
     _HOOK_MARKER_END,
+    hook_for_shell,
 )
 
 SUPPORTED_SHELLS = ["bash", "zsh", "fish", "powershell"]

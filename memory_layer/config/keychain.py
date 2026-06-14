@@ -29,7 +29,7 @@ def store_api_key(provider: str, api_key: str) -> None:
     keyring.set_password(SERVICE_NAME, f"api_key:{provider}", api_key)
 
 
-def get_api_key(provider: str) -> Optional[str]:
+def get_api_key(provider: str) -> str | None:
     """Retrieve a stored API key. Returns None if keyring is absent or key not found."""
     try:
         import keyring

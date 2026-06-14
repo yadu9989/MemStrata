@@ -4,14 +4,15 @@ Phase 15' — cd-hook idempotency and file I/O tests.
 Verifies write_hook / remove_hook behavior: backup creation, idempotent
 replacement, no duplication, and clean removal.
 """
-import pytest
 from pathlib import Path
 
+import pytest
+
 from memory_layer.cli.cd_hook import (
-    write_hook,
-    remove_hook,
     _HOOK_MARKER_BEGIN,
     _HOOK_MARKER_END,
+    remove_hook,
+    write_hook,
 )
 
 EXISTING_CONTENT = "# existing shell config\nexport FOO=bar\n"

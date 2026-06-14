@@ -16,7 +16,6 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirror the isolation pattern from tests/test_api_server.py)
 # ---------------------------------------------------------------------------
@@ -112,7 +111,7 @@ class TestToolFunctionsDirect:
 
     def test_get_chat_history_returns_dialogue(self, client):
         _seed_turns(client)
-        from memory_layer.layer3.mcp_app import tool_list_chat_sessions, tool_get_chat_history
+        from memory_layer.layer3.mcp_app import tool_get_chat_history, tool_list_chat_sessions
         sessions = tool_list_chat_sessions(limit=20)["sessions"]
         match = next(s for s in sessions if s["external_session_id"] == "ext-chat-aaa")
         cs_id = match["chat_session_id"]

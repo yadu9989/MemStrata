@@ -18,7 +18,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -76,7 +75,7 @@ class TestWalker:
         assert all("node_modules" not in r for r in rels), rels
 
     def test_chunk_text_splits_on_whitespace(self):
-        from memory_layer.cli.ingest import chunk_text, CHUNK_CHARS
+        from memory_layer.cli.ingest import CHUNK_CHARS, chunk_text
         text = ("hello world " * 1000).strip()
         chunks = chunk_text(text, chunk_chars=200)
         assert len(chunks) > 1

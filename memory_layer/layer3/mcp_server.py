@@ -11,9 +11,10 @@ Hard Rule 54: no psutil.process_iter(). Discovery is MCP roots only.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Optional
 
 log = logging.getLogger(__name__)
 
@@ -26,9 +27,9 @@ class ClientRootState:
     """Per-client root state. Retained across disconnect-reconnect cycles."""
     client_id: str
     roots: dict[str, str] = field(default_factory=dict)  # uri → name
-    connected_at: Optional[datetime] = None
-    last_seen_at: Optional[datetime] = None
-    disconnected_at: Optional[datetime] = None
+    connected_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    disconnected_at: datetime | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -63,7 +64,7 @@ class McpRootsHandler:
     def __init__(
         self,
         register_project: RegisterFn,
-        emit_event: Optional[EmitFn] = None,
+        emit_event: EmitFn | None = None,
     ) -> None:
         self._clients: dict[str, ClientRootState] = {}
         self._register_project = register_project
@@ -166,7 +167,7 @@ class McpRootsHandler:
 
     # ── Accessors ───────────────────────────────────────────────────────────
 
-    def get_client_state(self, client_id: str) -> Optional[ClientRootState]:
+    def get_client_state(self, client_id: str) -> ClientRootState | None:
         return self._clients.get(client_id)
 
     def all_clients(self) -> dict[str, ClientRootState]:
@@ -178,7 +179,7 @@ class McpRootsHandler:
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def _uri_to_local_path(uri: str) -> Optional[str]:
+def _uri_to_local_path(uri: str) -> str | None:
     """
     Convert a file:// URI to an absolute local filesystem path.
 

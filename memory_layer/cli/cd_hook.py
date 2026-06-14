@@ -118,7 +118,7 @@ def remove_hook(config_path: Path) -> None:
     config_path.write_text(before.rstrip() + "\n" + after.lstrip("\n"), encoding="utf-8")
 
 
-def detect_shell() -> Optional[str]:
+def detect_shell() -> str | None:
     """Best-effort shell detection from the environment."""
     shell_env = os.environ.get("SHELL", "")
     if "zsh" in shell_env:

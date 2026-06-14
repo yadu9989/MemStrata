@@ -14,13 +14,12 @@ from memory_layer.layer3.ingestion import (
 )
 from memory_layer.layer3.ingestion.orchestrator import record_opt_in
 from memory_layer.layer3.ingestion.watcher import (
-    CodebaseWatcher,
     DEBOUNCE_SECONDS,
+    CodebaseWatcher,
     NotOptedIn,
     ReindexResult,
     reindex_file,
 )
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 

@@ -56,7 +56,7 @@ class OllamaHealth:
     status: OllamaStatus
     configured_model: str
     installed_models: list[str] = field(default_factory=list)
-    error_detail: Optional[str] = None
+    error_detail: str | None = None
 
 
 # ── Internal classification ────────────────────────────────────────────────

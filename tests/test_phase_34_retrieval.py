@@ -20,7 +20,6 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -142,7 +141,7 @@ class TestScoringBlend:
         assert final == pytest.approx(0.7 * 0.8 + 0.3 * rec, abs=1e-6)
 
     def test_recency_decays_with_age(self):
-        from memory_layer.layer3.retrieval import compute_final_score, RECENCY_HALF_LIFE_SECONDS
+        from memory_layer.layer3.retrieval import RECENCY_HALF_LIFE_SECONDS, compute_final_score
         now = datetime.now(timezone.utc)
         # At exactly 3 days old, recency = 0.5 ** 1 = 0.5
         three_days_ago = now - timedelta(seconds=RECENCY_HALF_LIFE_SECONDS)
@@ -181,7 +180,7 @@ class TestTokenBudget:
 
     def test_skips_turn_that_exceeds_budget(self):
         """A turn whose token cost alone exceeds the budget must be skipped."""
-        from memory_layer.layer3.retrieval import fit_to_budget, estimate_tokens
+        from memory_layer.layer3.retrieval import estimate_tokens, fit_to_budget
         long_text = "x" * 800  # 800 chars = 200 tokens
         short_text = "y" * 40  # 40 chars = 10 tokens
         turns = [
@@ -201,7 +200,7 @@ class TestTokenBudget:
 
     def test_greedy_fills_to_budget(self):
         """Multiple small turns should be packed in until budget is exhausted."""
-        from memory_layer.layer3.retrieval import fit_to_budget, estimate_tokens
+        from memory_layer.layer3.retrieval import estimate_tokens, fit_to_budget
         turns = [self._make_turn("a" * 40, float(i)) for i in range(10)]
         budget = estimate_tokens("a" * 40) * 3  # room for exactly 3 turns
         selected = fit_to_budget(turns, token_budget=budget)

@@ -15,7 +15,6 @@ from memory_layer.layer3.ingestion.chunker import (
     stable_hash,
 )
 
-
 # ── Language detection ────────────────────────────────────────────────────
 
 class TestDetectLanguage:

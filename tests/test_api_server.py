@@ -19,7 +19,6 @@ import sqlite3
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Pro-overlay gating (V5.2-E E.3)
 # ---------------------------------------------------------------------------
@@ -1348,7 +1347,8 @@ class TestOutputSavingsFormula:
 
     def test_compute_output_savings_basic(self):
         from memory_layer.layer3.pricing.lookup import (
-            Rates, compute_output_savings_usd,
+            Rates,
+            compute_output_savings_usd,
         )
         r = Rates(input_per_m=10.0, output_per_m=50.0)
         # baseline_avg_output=300, actual=100 → saved=200 tokens × $50/M = $0.01
@@ -1356,7 +1356,8 @@ class TestOutputSavingsFormula:
 
     def test_compute_output_savings_clamped_at_zero(self):
         from memory_layer.layer3.pricing.lookup import (
-            Rates, compute_output_savings_usd,
+            Rates,
+            compute_output_savings_usd,
         )
         r = Rates(input_per_m=10.0, output_per_m=50.0)
         # actual > baseline: no savings, clamp to 0.0

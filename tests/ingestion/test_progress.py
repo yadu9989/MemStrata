@@ -25,7 +25,6 @@ from memory_layer.layer3.ingestion.progress import (
 )
 from memory_layer.layer3.ingestion.resource_policy import BatteryState
 
-
 # ── ETA / snapshot math ───────────────────────────────────────────────
 
 class TestBuildSnapshot:

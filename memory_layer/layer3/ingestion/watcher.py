@@ -45,9 +45,10 @@ import logging
 import sqlite3
 import threading
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Optional
 
 from memory_layer.layer3.ingestion.chunker import (
     Chunk,
@@ -105,12 +106,12 @@ class ReindexResult:
     unchanged: int = 0
     embedded: int = 0
     deleted_from_vec: int = 0
-    skipped_reason: Optional[str] = None
+    skipped_reason: str | None = None
     # File was discovered missing on disk (e.g. moved or deleted).
     file_missing: bool = False
 
 
-def _file_content_hash(path: Path) -> Optional[str]:
+def _file_content_hash(path: Path) -> str | None:
     try:
         h = hashlib.sha256()
         with open(path, "rb") as f:
@@ -127,10 +128,10 @@ def reindex_file(
     project_root: Path,
     file_path: Path,
     *,
-    embedder: Optional[Embedder] = None,
-    skip_policy: Optional[ProjectSkipPolicy] = None,
-    gitignore_matcher: Optional[object] = None,
-    vec_loaded: Optional[bool] = None,
+    embedder: Embedder | None = None,
+    skip_policy: ProjectSkipPolicy | None = None,
+    gitignore_matcher: object | None = None,
+    vec_loaded: bool | None = None,
 ) -> ReindexResult:
     """Diff one file against its existing code_chunks rows.
 
@@ -358,8 +359,8 @@ class CodebaseWatcher:
         *,
         project_id: str,
         project_root: str | Path,
-        embedder: Optional[Embedder] = None,
-        skip_policy: Optional[ProjectSkipPolicy] = None,
+        embedder: Embedder | None = None,
+        skip_policy: ProjectSkipPolicy | None = None,
         respect_gitignore: bool = True,
         clock: Callable[[], float] = time.monotonic,
         debounce_seconds: float = DEBOUNCE_SECONDS,
@@ -382,11 +383,11 @@ class CodebaseWatcher:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._observer = None
-        self._drain_thread: Optional[threading.Thread] = None
+        self._drain_thread: threading.Thread | None = None
         self._vec_loaded = _try_load_vec(self.conn)
         # Stats; surfaced via ``stats`` for tests + UI hookups.
         self._processed_count = 0
-        self._last_result: Optional[ReindexResult] = None
+        self._last_result: ReindexResult | None = None
 
     # ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -395,14 +396,14 @@ class CodebaseWatcher:
         if self._observer is not None:
             raise RuntimeError("CodebaseWatcher already started")
         try:
-            from watchdog.observers import Observer
             from watchdog.events import (
                 FileCreatedEvent,
+                FileDeletedEvent,
                 FileModifiedEvent,
                 FileMovedEvent,
-                FileDeletedEvent,
                 FileSystemEventHandler,
             )
+            from watchdog.observers import Observer
         except ImportError as exc:                         # pragma: no cover
             raise RuntimeError("watchdog is required for CodebaseWatcher") from exc
 
@@ -472,7 +473,7 @@ class CodebaseWatcher:
         the watchdog handler thread."""
         self._enqueue(path)
 
-    def drain_pending(self, now: Optional[float] = None) -> list[ReindexResult]:
+    def drain_pending(self, now: float | None = None) -> list[ReindexResult]:
         """Process every settled path. Exposed for test determinism;
         the production drain thread calls this on a timer."""
         now = now if now is not None else self.clock()
@@ -518,5 +519,5 @@ class CodebaseWatcher:
         return self._processed_count
 
     @property
-    def last_result(self) -> Optional[ReindexResult]:
+    def last_result(self) -> ReindexResult | None:
         return self._last_result

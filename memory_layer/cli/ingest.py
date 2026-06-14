@@ -26,13 +26,13 @@ import logging
 import sqlite3
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import requests
 
-from memory_layer.layer3._db import get_db_path, init_db, _load_vec_extension
+from memory_layer.layer3._db import _load_vec_extension, get_db_path, init_db
 
 _logger = logging.getLogger(__name__)
 

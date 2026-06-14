@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 import requests
 
-from memory_layer.layer3._db import get_db_path, _load_vec_extension
+from memory_layer.layer3._db import _load_vec_extension, get_db_path
 
 _logger = logging.getLogger(__name__)
 

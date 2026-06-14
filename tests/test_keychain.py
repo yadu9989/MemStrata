@@ -6,10 +6,10 @@ touching the real OS keychain. Also verifies the ImportError fallback
 paths (keyring not installed).
 """
 import sys
+
 import pytest
 
 from memory_layer.config.keychain import SERVICE_NAME
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -47,13 +47,13 @@ def no_keyring(monkeypatch):
 # ── store / get round-trip ────────────────────────────────────────────────────
 
 def test_store_and_get_round_trip(mock_keyring):
-    from memory_layer.config.keychain import store_api_key, get_api_key
+    from memory_layer.config.keychain import get_api_key, store_api_key
     store_api_key("anthropic", "sk-ant-test-key")
     assert get_api_key("anthropic") == "sk-ant-test-key"
 
 
 def test_store_and_get_different_providers_are_independent(mock_keyring):
-    from memory_layer.config.keychain import store_api_key, get_api_key
+    from memory_layer.config.keychain import get_api_key, store_api_key
     store_api_key("anthropic", "sk-ant-abc")
     store_api_key("openai", "sk-openai-xyz")
     assert get_api_key("anthropic") == "sk-ant-abc"
@@ -66,7 +66,7 @@ def test_get_missing_key_returns_none(mock_keyring):
 
 
 def test_overwrite_updates_stored_value(mock_keyring):
-    from memory_layer.config.keychain import store_api_key, get_api_key
+    from memory_layer.config.keychain import get_api_key, store_api_key
     store_api_key("anthropic", "old-key")
     store_api_key("anthropic", "new-key")
     assert get_api_key("anthropic") == "new-key"
@@ -75,7 +75,7 @@ def test_overwrite_updates_stored_value(mock_keyring):
 # ── delete ────────────────────────────────────────────────────────────────────
 
 def test_delete_removes_key(mock_keyring):
-    from memory_layer.config.keychain import store_api_key, get_api_key, delete_api_key
+    from memory_layer.config.keychain import delete_api_key, get_api_key, store_api_key
     store_api_key("anthropic", "sk-ant-test")
     delete_api_key("anthropic")
     assert get_api_key("anthropic") is None
@@ -87,7 +87,7 @@ def test_delete_nonexistent_does_not_raise(mock_keyring):
 
 
 def test_delete_leaves_other_providers_intact(mock_keyring):
-    from memory_layer.config.keychain import store_api_key, get_api_key, delete_api_key
+    from memory_layer.config.keychain import delete_api_key, get_api_key, store_api_key
     store_api_key("anthropic", "sk-ant")
     store_api_key("openai", "sk-oai")
     delete_api_key("anthropic")

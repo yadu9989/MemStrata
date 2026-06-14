@@ -37,7 +37,6 @@ from memory_layer.layer3.ollama_health import (
     check_ollama_sync,
 )
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 class _FakeResponse:
@@ -47,7 +46,7 @@ class _FakeResponse:
         self._body = body
         self.status = status
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -225,6 +224,7 @@ class TestLifespanNonBlocking:
         well under the threshold even on a cold sandbox.
         """
         from fastapi.testclient import TestClient
+
         import memory_layer.layer3.api_server as srv
 
         start = time.monotonic()

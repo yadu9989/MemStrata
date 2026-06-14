@@ -82,7 +82,7 @@ SMALL_FILE_LINE_THRESHOLD = 50
 FALLBACK_WINDOW_LINES = 100
 
 
-def detect_language(path: str | Path) -> Optional[str]:
+def detect_language(path: str | Path) -> str | None:
     """Return the chunker's language id for *path*, or None if unsupported."""
     suffix = Path(path).suffix.lower()
     return _LANG_BY_EXT.get(suffix)
@@ -144,7 +144,7 @@ class Chunk:
     text: str
     stable_hash: str
     entity_kind: str
-    entity_name: Optional[str] = None
+    entity_name: str | None = None
     token_estimate: int = 0
     # Helpful for tests; not stored in DB.
     metadata: dict = field(default_factory=dict)
@@ -182,7 +182,7 @@ def _estimate_tokens(text: str) -> int:
 
 # ── Per-language entity name extraction ───────────────────────────────────
 
-def _entity_name_python(node) -> Optional[str]:
+def _entity_name_python(node) -> str | None:
     # function_definition / class_definition both have an `identifier`
     # child named "name" in the Python grammar.
     name_node = node.child_by_field_name("name")
@@ -191,7 +191,7 @@ def _entity_name_python(node) -> Optional[str]:
     return None
 
 
-def _entity_name_js_ts(node) -> Optional[str]:
+def _entity_name_js_ts(node) -> str | None:
     """JS/TS: function_declaration / class_declaration / method_definition all
     have a name child. lexical_declaration (e.g. `const Foo = ...`) names
     appear under variable_declarator -> identifier."""
@@ -207,7 +207,7 @@ def _entity_name_js_ts(node) -> Optional[str]:
     return None
 
 
-def _entity_name(language: str, node) -> Optional[str]:
+def _entity_name(language: str, node) -> str | None:
     if language == "python":
         return _entity_name_python(node)
     return _entity_name_js_ts(node)

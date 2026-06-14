@@ -33,7 +33,7 @@ _FALLBACK_RATE = 1.36
 _FALLBACK_DATE = "2026-06-13"
 
 _CACHE_TTL_S = 24 * 3600
-_cache: Optional["FxRate"] = None
+_cache: FxRate | None = None
 _cache_until: float = 0.0
 
 
@@ -69,13 +69,14 @@ def _build_ssl_context():
     """
     try:
         import ssl
+
         import truststore  # type: ignore[import]
         return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     except ImportError:
         return None
 
 
-def _fetch_boc() -> Optional[FxRate]:
+def _fetch_boc() -> FxRate | None:
     """Fetch the latest USDCAD from BoC Valet. None on any failure."""
     try:
         req = urllib.request.Request(

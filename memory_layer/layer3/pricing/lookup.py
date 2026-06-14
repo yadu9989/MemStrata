@@ -25,8 +25,8 @@ _DATE_SUFFIX_RE = re.compile(r"-\d{8}$|-\d{4}-\d{2}-\d{2}$")
 class Rates:
     input_per_m: float
     output_per_m: float
-    cache_write_per_m: Optional[float] = None
-    cache_read_per_m: Optional[float] = None
+    cache_write_per_m: float | None = None
+    cache_read_per_m: float | None = None
 
 
 def normalize_model(model: str) -> str:
@@ -46,7 +46,7 @@ def _get_rates_from_db(
     provider: str,
     model: str,
     conn: sqlite3.Connection,
-) -> Optional[Rates]:
+) -> Rates | None:
     normalized = normalize_model(model)
     for m in (model, normalized):
         try:
@@ -82,7 +82,7 @@ def _load_static() -> dict:
     return _loaded_static
 
 
-def _get_rates_from_static(provider: str, model: str) -> Optional[Rates]:
+def _get_rates_from_static(provider: str, model: str) -> Rates | None:
     matrix = _load_static()
     providers = matrix.get("providers", {})
     if provider not in providers:
@@ -108,8 +108,8 @@ def get_rates(
     provider: str,
     model: str,
     *,
-    conn: Optional[sqlite3.Connection] = None,
-) -> Optional[Rates]:
+    conn: sqlite3.Connection | None = None,
+) -> Rates | None:
     """Return Rates for (provider, model) or None if unknown.
 
     Tries live DB first (OpenRouter data), then falls back to the bundled

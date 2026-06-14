@@ -64,7 +64,7 @@ def _parse_openrouter_models(data: list[dict]) -> list[dict]:
 
         pricing = entry.get("pricing") or {}
 
-        def _to_per_m(val: object) -> Optional[float]:
+        def _to_per_m(val: object) -> float | None:
             try:
                 f = float(val)  # type: ignore[arg-type]
                 return round(f * 1_000_000, 6) if f > 0 else None
@@ -108,6 +108,7 @@ def _build_httpx_client(timeout: float = 15.0) -> httpx.Client:
     """
     try:
         import ssl
+
         import truststore  # type: ignore[import]
         ctx = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         return httpx.Client(timeout=timeout, verify=ctx)

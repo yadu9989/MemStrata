@@ -17,9 +17,9 @@ import os
 import re
 import sqlite3
 import uuid
+from collections.abc import Generator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Generator
 
 _logger = logging.getLogger(__name__)
 

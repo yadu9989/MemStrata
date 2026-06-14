@@ -30,7 +30,7 @@ class ControlState:
     # Resource policy can set a soft-pause reason without flipping the
     # full pause_flag — used so the UI can show "paused: on-battery"
     # without persisting a paused phase to the DB.
-    soft_pause_reason: Optional[str] = None
+    soft_pause_reason: str | None = None
     # Set whenever the orchestrator finishes a phase or batch; lets the
     # API endpoint block on "wait until paused" if it ever needs to.
     progress_event: threading.Event = field(default_factory=threading.Event)
@@ -55,7 +55,7 @@ class ControlRegistry:
                 self._states[project_id] = state
             return state
 
-    def get(self, project_id: str) -> Optional[ControlState]:
+    def get(self, project_id: str) -> ControlState | None:
         with self._lock:
             return self._states.get(project_id)
 
@@ -79,20 +79,20 @@ class ProgressSnapshot:
     files_processed: int
     entities_total: int
     entities_embedded: int
-    last_processed_file: Optional[str]
+    last_processed_file: str | None
     started_at: str
-    completed_at: Optional[str]
-    error: Optional[str]
+    completed_at: str | None
+    error: str | None
     # Derived fields:
     files_pct: float            # 0..1
     entities_pct: float         # 0..1
     elapsed_seconds: float
-    eta_seconds: Optional[float]
-    rate_files_per_second: Optional[float]
-    rate_entities_per_second: Optional[float]
+    eta_seconds: float | None
+    rate_files_per_second: float | None
+    rate_entities_per_second: float | None
     is_paused: bool
     is_cancelling: bool
-    soft_pause_reason: Optional[str]
+    soft_pause_reason: str | None
 
     def to_dict(self) -> dict:
         return {
@@ -119,7 +119,7 @@ class ProgressSnapshot:
         }
 
 
-def _parse_db_timestamp(value: str) -> Optional[datetime]:
+def _parse_db_timestamp(value: str) -> datetime | None:
     """SQLite default `CURRENT_TIMESTAMP` lays down strings like
     '2026-06-07 04:32:11'. ISO-8601 with 'T' separator works too."""
     if not value:
@@ -141,8 +141,8 @@ def _safe_pct(num: float, denom: float) -> float:
 def build_snapshot(
     row: dict,
     *,
-    now: Optional[datetime] = None,
-    control: Optional[ControlState] = None,
+    now: datetime | None = None,
+    control: ControlState | None = None,
 ) -> ProgressSnapshot:
     """Translate an indexing_jobs row dict into a UI snapshot.
 
@@ -168,7 +168,7 @@ def build_snapshot(
     # ETA is "how long to finish the slowest still-pending phase". We
     # take the max of files-remaining and entities-remaining wall times
     # so the user sees the longer of the two as the truth.
-    eta: Optional[float] = None
+    eta: float | None = None
     if row.get("phase") in ("parse", "embed"):
         candidates: list[float] = []
         if rate_files and files_total > files_processed:

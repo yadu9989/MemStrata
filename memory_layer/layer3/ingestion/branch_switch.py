@@ -23,9 +23,10 @@ import hashlib
 import logging
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from memory_layer.layer3.ingestion.chunker import detect_language
 from memory_layer.layer3.ingestion.denylist import (
@@ -78,7 +79,7 @@ def _enumerate_files(
     root: Path,
     *,
     policy: ProjectSkipPolicy,
-    gitignore_matcher: Optional[object],
+    gitignore_matcher: object | None,
 ) -> list[Path]:
     """Recursive walk that yields every PARSEABLE file under root.
 
@@ -114,7 +115,7 @@ def _enumerate_files(
     return out
 
 
-def _file_sha256(path: Path) -> Optional[str]:
+def _file_sha256(path: Path) -> str | None:
     """SHA-256 of file bytes, or None on read failure."""
     try:
         h = hashlib.sha256()
@@ -133,8 +134,8 @@ def sweep_branch_switch(
     project_id: str,
     project_root: str | Path,
     *,
-    embedder: Optional[Embedder] = None,
-    skip_policy: Optional[ProjectSkipPolicy] = None,
+    embedder: Embedder | None = None,
+    skip_policy: ProjectSkipPolicy | None = None,
     respect_gitignore: bool = True,
 ) -> SweepResult:
     """Walk *project_root*, diff against ``file_hashes``, dispatch changes.

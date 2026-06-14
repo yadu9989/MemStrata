@@ -1,0 +1,70 @@
+name: publish
+
+# Triggered on any `v*` tag push. The release pipeline builds the
+# sdist + wheel, then uploads to PyPI using the official PyPA action.
+#
+# Trusted publishing (OIDC) is the recommended path — it requires
+# configuring the PyPI project's "Trusted Publishers" section once,
+# pointing at this repository + workflow name + environment. After
+# that, no PyPI API token is needed; the workflow's id-token: write
+# permission is what authorizes the upload.
+#
+# If trusted publishing isn't configured yet, the pypa action falls
+# back to the PYPI_API_TOKEN repository secret. Either works.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  # OIDC publishing requires id-token: write on the publish job. Other
+  # default permissions stay at minimum read.
+  contents: read
+
+jobs:
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install build backend
+        run: pip install --upgrade build
+      - name: Build
+        run: python -m build
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Optional environment with manual approval can be wired here for
+    # extra safety. To enable, configure a GitHub Environment named
+    # "pypi" with required reviewers; then uncomment the line below.
+    # environment: pypi
+
+    permissions:
+      # OIDC trusted publishing — see header comment.
+      id-token: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No `with:` block needed when using trusted publishing — the
+        # action picks up the OIDC token automatically. If you must
+        # fall back to a long-lived API token, uncomment:
+        # with:
+        #   password: ${{ secrets.PYPI_API_TOKEN }}

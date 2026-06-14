@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
-from typing import Iterable, Optional
+from typing import Optional
 
 _LOG = logging.getLogger(__name__)
 
@@ -122,11 +123,11 @@ class IndexDecision:
     reason: str
 
     @classmethod
-    def yes(cls, reason: str = "") -> "IndexDecision":
+    def yes(cls, reason: str = "") -> IndexDecision:
         return cls(True, reason)
 
     @classmethod
-    def no(cls, reason: str) -> "IndexDecision":
+    def no(cls, reason: str) -> IndexDecision:
         return cls(False, reason)
 
 
@@ -196,7 +197,7 @@ def should_index(
     project_root: Path,
     *,
     policy: ProjectSkipPolicy = ProjectSkipPolicy(),
-    gitignore_matcher: Optional[object] = None,
+    gitignore_matcher: object | None = None,
 ) -> IndexDecision:
     """Whether a single file should be passed to the chunker.
 

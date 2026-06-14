@@ -67,6 +67,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from memory_layer.layer3 import retrieval as _retrieval
 from memory_layer.layer3._db import (
     enqueue_for_embedding,
     get_conn,
@@ -77,16 +78,14 @@ from memory_layer.layer3._db import (
     parse_recorded_at,
     upsert_chat_session,
 )
-from memory_layer.layer3 import retrieval as _retrieval
-from memory_layer.workers.embedding_worker import EmbeddingWorker
 from memory_layer.layer3.pricing.lookup import (
-    get_rates,
-    compute_input_savings_usd,
     compute_cache_savings_usd,
+    compute_input_savings_usd,
     compute_output_savings_usd,
+    get_rates,
 )
 from memory_layer.layer3.pricing.openrouter_sync import sync_loop as _pricing_sync_loop
-
+from memory_layer.workers.embedding_worker import EmbeddingWorker
 
 # ---------------------------------------------------------------------------
 # V5.2-E E.1: cohort baseline dependency injection.
@@ -109,7 +108,7 @@ class _NoOpCohortApi:
 _default_cohort_api: object = _NoOpCohortApi()
 
 
-def _cohort_api_for_app(app_obj: "FastAPI") -> object:
+def _cohort_api_for_app(app_obj: FastAPI) -> object:
     return getattr(app_obj.state, "cohort_api", _default_cohort_api)
 
 
@@ -334,6 +333,7 @@ async def _ollama_polling_loop(app_ref) -> None:
     """
     import asyncio
     from datetime import datetime, timezone
+
     from memory_layer.layer3.ollama_health import (
         OllamaStatus,
         check_ollama_async,
@@ -1744,7 +1744,8 @@ def indexing_state(conn: Conn) -> dict:
     also reads it to surface "Indexing X% complete" in the terminal.
     """
     from memory_layer.layer3.ingestion.progress import (
-        CONTROL_REGISTRY, build_snapshot,
+        CONTROL_REGISTRY,
+        build_snapshot,
     )
     rows = conn.execute(
         """

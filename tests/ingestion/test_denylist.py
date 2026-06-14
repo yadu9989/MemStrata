@@ -9,15 +9,14 @@ from memory_layer.layer3.ingestion.denylist import (
     DENY_FILE_BASENAMES,
     DENY_FILE_EXTENSIONS,
     HARDCODED_DENYLIST,
-    IndexDecision,
     MAX_FILE_SIZE_BYTES,
-    ProjectSkipPolicy,
     SECONDARY_SKIP,
+    IndexDecision,
+    ProjectSkipPolicy,
     _looks_binary,
     should_index,
     should_walk_dir,
 )
-
 
 # ── Hard Rule 71: hardcoded denylist is comprehensive + frozen ───────────
 

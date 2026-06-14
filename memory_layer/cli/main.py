@@ -14,7 +14,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 # ── init ───────────────────────────────────────────────────────────────────────
 
 def _cmd_init(args: argparse.Namespace) -> None:
@@ -49,8 +48,8 @@ def _cmd_init(args: argparse.Namespace) -> None:
     if model_choice not in ("1", "2", "3"):
         model_choice = "1"
 
-    provider_key: Optional[str] = None
-    provider_name: Optional[str] = None
+    provider_key: str | None = None
+    provider_name: str | None = None
     if model_choice in ("2", "3"):
         provider_name = "anthropic" if model_choice == "2" else "openai"
         provider_key = _api_key_wizard(provider_name)
@@ -65,7 +64,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
         enable_hook = input("      [Y/n] ").strip().lower() not in ("n", "no")
 
     # ── [4/4] Which shell? ────────────────────────────────────────────────
-    shell: Optional[str] = None
+    shell: str | None = None
     if enable_hook:
         from memory_layer.cli.cd_hook import detect_shell
         detected = detect_shell()
@@ -106,7 +105,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
             print(f"  ! Warning: {exc}", file=sys.stderr)
 
     if enable_hook and shell:
-        from memory_layer.cli.cd_hook import write_hook, config_path_for_shell
+        from memory_layer.cli.cd_hook import config_path_for_shell, write_hook
         config_path = config_path_for_shell(shell)
         try:
             write_hook(shell, config_path)
@@ -126,7 +125,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
     print("\nMemory Layer is ready. Run `memory-layer api` to start.\n")
 
 
-def _api_key_wizard(provider: str) -> Optional[str]:
+def _api_key_wizard(provider: str) -> str | None:
     """Walk the user through pasting and validating an API key."""
     urls = {
         "anthropic": "https://console.anthropic.com/keys",
@@ -153,7 +152,7 @@ def _api_key_wizard(provider: str) -> Optional[str]:
     return key
 
 
-def _validate_api_key(provider: str, key: str) -> Optional[bool]:
+def _validate_api_key(provider: str, key: str) -> bool | None:
     """Return True if key is valid, False if definitively bad, None if check failed."""
     try:
         import httpx
@@ -180,7 +179,7 @@ def _validate_api_key(provider: str, key: str) -> Optional[bool]:
 
 def _cmd_uninit_cd_hook(args: argparse.Namespace) -> None:
     """Remove the memory-layer cd-hook from the user's shell config."""
-    from memory_layer.cli.cd_hook import remove_hook, config_path_for_shell, detect_shell
+    from memory_layer.cli.cd_hook import config_path_for_shell, detect_shell, remove_hook
 
     shell = getattr(args, "shell", None) or detect_shell()
     if not shell:

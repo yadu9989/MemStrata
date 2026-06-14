@@ -27,8 +27,9 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Optional
 
 _LOG = logging.getLogger(__name__)
 
@@ -42,23 +43,23 @@ class ResourcePolicy:
     """Composable policy. Each field can be overridden by the wizard."""
 
     cpu_priority: str = "below_normal"             # 'below_normal' | 'normal'
-    concurrent_embeddings: Optional[int] = None    # None = auto
+    concurrent_embeddings: int | None = None    # None = auto
     pause_on_battery: bool = True
     pause_on_typing: bool = True
     typing_idle_seconds: float = DEFAULT_TYPING_IDLE_SECONDS
     max_ram_bytes: int = DEFAULT_MAX_RAM_BYTES
 
     # Injectable for tests so we don't have to mock OS APIs everywhere.
-    battery_detector: Callable[[], "BatteryState"] = field(
+    battery_detector: Callable[[], BatteryState] = field(
         default_factory=lambda: detect_battery_state
     )
-    typing_idle_detector: Callable[[], Optional[float]] = field(
+    typing_idle_detector: Callable[[], float | None] = field(
         default_factory=lambda: detect_idle_seconds
     )
     # V5.2-A Phase 35.6 — RSS probe for the max-RAM check. Returns None
     # when psutil isn't available; the policy treats None as "can't tell
     # -> don't pause" so a stripped-down build still indexes.
-    memory_probe: Callable[[], Optional[int]] = field(
+    memory_probe: Callable[[], int | None] = field(
         default_factory=lambda: current_rss_bytes
     )
 
@@ -124,7 +125,7 @@ class ResourcePolicy:
 @dataclass(frozen=True)
 class BatteryState:
     on_battery_power: bool       # True when running on battery
-    percent: Optional[float] = None
+    percent: float | None = None
     detectable: bool = True      # False -> we couldn't read the signal
 
 
@@ -134,7 +135,7 @@ def detect_battery_state() -> BatteryState:
     machine should never pause for battery reasons.
     """
     try:
-        import psutil           # type: ignore[import-not-found]
+        import psutil  # type: ignore[import-not-found]
     except ImportError:
         return BatteryState(False, None, detectable=False)
     try:
@@ -153,7 +154,7 @@ def detect_battery_state() -> BatteryState:
 
 # ── Typing / input idle detection ────────────────────────────────────────
 
-def detect_idle_seconds() -> Optional[float]:
+def detect_idle_seconds() -> float | None:
     """Seconds since the user's last keyboard / mouse event, or None.
 
     Implementations:
@@ -174,10 +175,10 @@ def detect_idle_seconds() -> Optional[float]:
     return None
 
 
-def _windows_idle_seconds() -> Optional[float]:
+def _windows_idle_seconds() -> float | None:
     try:
         import ctypes
-        from ctypes import wintypes        # type: ignore[attr-defined]
+        from ctypes import wintypes  # type: ignore[attr-defined]
 
         class LASTINPUTINFO(ctypes.Structure):
             _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
@@ -194,7 +195,7 @@ def _windows_idle_seconds() -> Optional[float]:
         return None
 
 
-def _macos_idle_seconds() -> Optional[float]:
+def _macos_idle_seconds() -> float | None:
     """Parse `ioreg -c IOHIDSystem` for the HIDIdleTime field (ns)."""
     try:
         result = subprocess.run(
@@ -213,7 +214,7 @@ def _macos_idle_seconds() -> Optional[float]:
     return int(m.group(1)) / 1_000_000_000.0
 
 
-def _linux_idle_seconds() -> Optional[float]:
+def _linux_idle_seconds() -> float | None:
     """Best-effort: `xprintidle` returns ms idle on X11.
 
     Wayland has no standardized cross-desktop idle API; we return None
@@ -287,10 +288,10 @@ def _unix_renice() -> bool:
 
 # ── RAM check ──────────────────────────────────────────────────────────
 
-def current_rss_bytes() -> Optional[int]:
+def current_rss_bytes() -> int | None:
     """Resident set size for this process, or None if not probeable."""
     try:
-        import psutil           # type: ignore[import-not-found]
+        import psutil  # type: ignore[import-not-found]
         return int(psutil.Process(os.getpid()).memory_info().rss)
     except Exception:                              # noqa: BLE001
         return None

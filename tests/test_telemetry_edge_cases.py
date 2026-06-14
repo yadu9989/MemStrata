@@ -20,7 +20,6 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures (mirrors test_api_server.py isolation pattern)
 # ---------------------------------------------------------------------------

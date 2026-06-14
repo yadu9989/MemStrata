@@ -21,7 +21,6 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -33,7 +32,7 @@ def isolated_db(tmp_path, monkeypatch):
 
 @pytest.fixture
 def db_conn(tmp_path, isolated_db):
-    from memory_layer.layer3._db import init_db, get_db_path
+    from memory_layer.layer3._db import get_db_path, init_db
     path = get_db_path()
     conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row

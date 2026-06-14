@@ -23,9 +23,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Optional
 
 from memory_layer.layer3._db import init_db
 from memory_layer.layer3.ingestion.branch_switch import (
@@ -50,10 +51,10 @@ class ProjectRuntime:
     """Per-project bag of running things the service must clean up."""
     project_id: str
     project_path: str
-    watcher: Optional[CodebaseWatcher] = None
-    sweep_thread: Optional[threading.Thread] = None
-    sweep_result: Optional[SweepResult] = None
-    sweep_error: Optional[str] = None
+    watcher: CodebaseWatcher | None = None
+    sweep_thread: threading.Thread | None = None
+    sweep_result: SweepResult | None = None
+    sweep_error: str | None = None
 
 
 WatcherFactory = Callable[[sqlite3.Connection, str, str], CodebaseWatcher]
@@ -65,8 +66,8 @@ def _default_watcher_factory(
     project_id: str,
     project_path: str,
     *,
-    embedder: Optional[Embedder] = None,
-    skip_policy: Optional[ProjectSkipPolicy] = None,
+    embedder: Embedder | None = None,
+    skip_policy: ProjectSkipPolicy | None = None,
 ) -> CodebaseWatcher:
     return CodebaseWatcher(
         conn,
@@ -82,8 +83,8 @@ def _default_sweep_factory(
     project_id: str,
     project_path: str,
     *,
-    embedder: Optional[Embedder] = None,
-    skip_policy: Optional[ProjectSkipPolicy] = None,
+    embedder: Embedder | None = None,
+    skip_policy: ProjectSkipPolicy | None = None,
 ) -> SweepResult:
     return sweep_branch_switch(
         conn, project_id, project_path,
@@ -100,11 +101,11 @@ class IngestionService:
         self,
         db_path: str | Path,
         *,
-        embedder: Optional[Embedder] = None,
-        resource_policy: Optional[ResourcePolicy] = None,
-        skip_policy: Optional[ProjectSkipPolicy] = None,
-        watcher_factory: Optional[Callable[..., CodebaseWatcher]] = None,
-        sweep_factory: Optional[Callable[..., SweepResult]] = None,
+        embedder: Embedder | None = None,
+        resource_policy: ResourcePolicy | None = None,
+        skip_policy: ProjectSkipPolicy | None = None,
+        watcher_factory: Callable[..., CodebaseWatcher] | None = None,
+        sweep_factory: Callable[..., SweepResult] | None = None,
         autostart_watchers: bool = True,
         autostart_sweeps: bool = True,
     ) -> None:
@@ -242,7 +243,7 @@ class IngestionService:
 
     # ── Read-only accessors (handy for the dashboard + tests) ──────────
 
-    def get_project(self, project_path: str | Path) -> Optional[ProjectRuntime]:
+    def get_project(self, project_path: str | Path) -> ProjectRuntime | None:
         with self._lock:
             return self._projects.get(str(Path(project_path).resolve()))
 

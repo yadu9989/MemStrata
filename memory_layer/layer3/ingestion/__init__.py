@@ -12,6 +12,10 @@ Hard Rules in scope:
 """
 from __future__ import annotations
 
+from memory_layer.layer3.ingestion.branch_switch import (
+    SweepResult,
+    sweep_branch_switch,
+)
 from memory_layer.layer3.ingestion.chunker import (
     Chunk,
     chunk_file,
@@ -23,13 +27,17 @@ from memory_layer.layer3.ingestion.denylist import (
     DENY_FILE_BASENAMES,
     DENY_FILE_EXTENSIONS,
     HARDCODED_DENYLIST,
-    IndexDecision,
     MAX_FILE_SIZE_BYTES,
-    ProjectSkipPolicy,
     SECONDARY_SKIP,
+    IndexDecision,
+    ProjectSkipPolicy,
     load_gitignore,
     should_index,
     should_walk_dir,
+)
+from memory_layer.layer3.ingestion.lifecycle import (
+    IngestionService,
+    ProjectRuntime,
 )
 from memory_layer.layer3.ingestion.orchestrator import (
     BackfillOrchestrator,
@@ -57,14 +65,6 @@ from memory_layer.layer3.ingestion.watcher import (
     NotOptedIn,
     ReindexResult,
     reindex_file,
-)
-from memory_layer.layer3.ingestion.branch_switch import (
-    SweepResult,
-    sweep_branch_switch,
-)
-from memory_layer.layer3.ingestion.lifecycle import (
-    IngestionService,
-    ProjectRuntime,
 )
 
 __all__ = [
