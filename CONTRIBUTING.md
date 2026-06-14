@@ -11,8 +11,8 @@ By participating in this project you agree to abide by the
 ## Development setup
 
 ```bash
-git clone https://github.com/yadu9989/MemStrata.git
-cd MemStrata
+git clone https://github.com/yadu9989/memstrata.git
+cd memstrata
 python -m venv .venv
 . .venv/bin/activate            # or .venv\Scripts\activate on Windows
 pip install -e ".[dev]"

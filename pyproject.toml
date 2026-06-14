@@ -78,8 +78,8 @@ memstrata = "memstrata.cli.main:main"
 
 [project.urls]
 Homepage = "https://memstrata.dev"
-Repository = "https://github.com/yadu9989/MemStrata"
-Issues = "https://github.com/yadu9989/MemStrata/issues"
+Repository = "https://github.com/yadu9989/memstrata"
+Issues = "https://github.com/yadu9989/memstrata/issues"
 
 [tool.setuptools.packages.find]
 include = ["memstrata*"]
