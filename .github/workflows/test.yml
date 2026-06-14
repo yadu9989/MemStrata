@@ -69,7 +69,44 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install dev dependencies
-        run: pip install -e ".[dev]"
+      # Wheels-first install. ci-constraints.txt pins every
+      # native-extension dep to an exact version; --only-binary=:all:
+      # forces pip to use prebuilt wheels for those deps. CI runners
+      # that built tree-sitter from source produced ABI-mismatched
+      # binaries that access-violated on Windows cp310/cp311. The
+      # fallback line drops --only-binary so the build doesn't fail
+      # hard if a wheel is genuinely missing for a niche transitive
+      # dep — but the constraint pins still apply.
+      - name: Install dev dependencies (CI — prefer wheels)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install --only-binary=:all: -c ci-constraints.txt -e ".[dev]" \
+            || python -m pip install -c ci-constraints.txt -e ".[dev]"
+      # Fail fast if the native bindings can't even import — much
+      # clearer signal than a segfault 200 tests into the run.
+      - name: Verify native bindings import
+        shell: bash
+        run: |
+          python - <<'PY'
+          import sys
+          failed = []
+          for mod in (
+              "tree_sitter",
+              "tree_sitter_python._binding",
+              "tree_sitter_javascript._binding",
+              "tree_sitter_typescript._binding",
+              "sqlite_vec",
+          ):
+              try:
+                  __import__(mod)
+              except Exception as e:
+                  failed.append((mod, repr(e)))
+          if failed:
+              for mod, err in failed:
+                  print(f"::error::{mod}: {err}")
+              sys.exit(1)
+          print("Native bindings imported OK on", sys.platform, sys.version)
+          PY
       - name: Pytest
         run: pytest -ra

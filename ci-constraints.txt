@@ -1,0 +1,16 @@
+# CI constraints — exact versions for native-extension dependencies.
+#
+# Used by .github/workflows/test.yml with `pip install --only-binary=:all:
+# -c ci-constraints.txt .[dev]` to force CI runners to use prebuilt
+# wheels and avoid building C extensions from source. Source builds on
+# CI have produced ABI-mismatched binaries that segfault / access-
+# violate mid-test on Windows 3.10/3.11 (cp310/cp311 wheels behave
+# differently than cp312 for the tree-sitter family).
+#
+# Keep these in sync with the matching pins in pyproject.toml. When
+# you bump a version, update both.
+tree-sitter==0.23.2
+tree-sitter-python==0.23.6
+tree-sitter-javascript==0.23.1
+tree-sitter-typescript==0.23.2
+sqlite-vec==0.1.6
