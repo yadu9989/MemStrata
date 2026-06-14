@@ -29,6 +29,12 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.10",
 
+    # `requests` is used in the ingestion CLI, the retrieval HTTP path, and
+    # the embedding worker for talking to Ollama. httpx covers the async
+    # routes; requests covers the sync call sites that pre-date the FastAPI
+    # surface (these are simpler synchronous POSTs from worker / CLI code).
+    "requests>=2.31",
+
     # Local SQLite + vector storage
     "sqlite-vec>=0.1.6",
 
