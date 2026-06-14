@@ -88,3 +88,6 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "requires_pro_overlay: test requires the memstrata-pro overlay; skipped on Open-only daemon",
+]

@@ -21,6 +21,39 @@ from fastapi.testclient import TestClient
 
 
 # ---------------------------------------------------------------------------
+# Pro-overlay gating (V5.2-E E.3)
+# ---------------------------------------------------------------------------
+#
+# Some tests in this file exercise endpoints and dashboard pieces that
+# only exist when the memstrata-pro overlay is mounted on the app
+# (``memory_layer_pro.api_overlay.mount``). On the Open-only daemon
+# the overlay isn't present, so the relevant routes and HTML are
+# absent. Decorate those tests with ``@pytest.mark.requires_pro_overlay``
+# and the autouse fixture below skips them when the overlay isn't
+# mounted.
+#
+# This keeps the tests in the public repo as living documentation of
+# the Pro capabilities, and they run automatically when the same
+# suite is exercised inside the memstrata-pro repo.
+
+
+def _pro_overlay_mounted() -> bool:
+    """Return True when the api_server app has had the Pro overlay mounted."""
+    from memory_layer.layer3.api_server import app
+    return hasattr(app.state, "cohort_api")
+
+
+@pytest.fixture(autouse=True)
+def _skip_if_pro_overlay_missing(request):
+    """Skip tests marked ``requires_pro_overlay`` when running Open-only."""
+    if request.node.get_closest_marker("requires_pro_overlay"):
+        if not _pro_overlay_mounted():
+            pytest.skip(
+                "Test requires memstrata-pro overlay; running on Open-only daemon."
+            )
+
+
+# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -732,7 +765,12 @@ class TestDashboardHtml:
         assert "/api/dashboard/state" in r.text
         assert "/api/dashboard/sessions" in r.text
 
+    @pytest.mark.requires_pro_overlay
     def test_dashboard_has_tab_elements(self, client):
+        # Asserts the Money tab + sub-tabs + /license/plan-features fetch URL
+        # are present in the dashboard HTML. Those pieces are injected by
+        # the Pro overlay's dashboard_extras substitution and are absent
+        # on Open-only.
         r = client.get("/dashboard")
         assert 'id="tabs"' in r.text
         # V5.3 top-level tabs
@@ -836,6 +874,7 @@ class TestDeleteAllMemory:
 # Phase 33 — Plan-feature endpoints
 # ---------------------------------------------------------------------------
 
+@pytest.mark.requires_pro_overlay
 class TestPlanFeatureEndpoints:
     def test_get_current_plan_returns_plan(self, client):
         r = client.get("/license/current-plan")
@@ -1323,9 +1362,15 @@ class TestOutputSavingsFormula:
         # actual > baseline: no savings, clamp to 0.0
         assert compute_output_savings_usd(100, 300, r) == 0.0
 
+    @pytest.mark.requires_pro_overlay
     def test_saved_output_cost_persists_to_db(self, client, db_conn):
         """End-to-end: with a cohort baseline closed, saved_output_cost_usd
-        must be populated when actual_output < cohort avg_output."""
+        must be populated when actual_output < cohort avg_output.
+
+        Requires Pro overlay: the cohort_baseline table is created by
+        memstrata-pro's apply_pro_schema / ProCohortApi.ensure_table.
+        On Open-only the table doesn't exist and the INSERT below errors.
+        """
         # Seed pricing
         db_conn.execute(
             "INSERT INTO provider_pricing (provider, model, input_per_m, output_per_m, fetched_at) "
