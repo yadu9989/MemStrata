@@ -15,6 +15,13 @@ from memstrata.layer3.ingestion import (
 )
 from memstrata.layer3.ingestion.orchestrator import record_opt_in
 
+# Whole file requires sqlite-vec — sweep_branch_switch routes through the
+# embed pipeline which writes to code_chunks_vec. On platforms without
+# sqlite-vec, the embed phase silently no-ops (production code degrades
+# gracefully), but the test assertions that check chunks_embedded counts
+# fail. Skip the file cleanly instead of failing those assertions.
+pytestmark = pytest.mark.requires_sqlite_vec
+
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 @pytest.fixture

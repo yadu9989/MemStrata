@@ -29,16 +29,24 @@ import pytest
 
 
 def _sqlite_vec_loads() -> bool:
-    """Probe sqlite-vec loadability and vec0 usability.
+    """Probe sqlite-vec loadability AND vec0 INSERT/SELECT roundtrip.
 
-    Returns True only when:
+    Returns True only when the FULL vec0 surface works:
       1. ``sqlite_vec`` is importable
       2. ``conn.enable_load_extension(True)`` doesn't raise
          (Python compiled with --enable-load-extension)
       3. ``sqlite_vec.load(conn)`` doesn't raise
          (the wheel's binary loads against this libsqlite3)
       4. ``CREATE VIRTUAL TABLE ... USING vec0(...)`` doesn't raise
-         (the vec0 module registered properly)
+      5. INSERT of a packed float vector doesn't raise
+      6. SELECT with MATCH (kNN query) doesn't raise
+
+    The earlier round of this probe checked only steps 1-4. A CI
+    failure on Ubuntu/3.12 inside ``test_phase_34_embedding.py``
+    (which IS marked ``requires_sqlite_vec``) implied the partial-load
+    case: vec0 registers, CREATE succeeds, but actual INSERT/SELECT
+    blows up. Adding steps 5-6 catches that case so the marker
+    correctly skips on platforms where vec0 partial-loads.
 
     Any failure step returns False. This matches the runtime
     behavior in ``memstrata.layer3._db._load_vec_extension`` and the
@@ -57,6 +65,19 @@ def _sqlite_vec_loads() -> bool:
             "CREATE VIRTUAL TABLE t USING vec0("
             "id INTEGER PRIMARY KEY, e float[8])"
         )
+        # INSERT + SELECT roundtrip — the steps that actually run
+        # under load in the embedding-worker / retrieval paths.
+        import struct
+        sample = struct.pack("<8f", *([0.1] * 8))
+        conn.execute("INSERT INTO t (id, e) VALUES (1, ?)", (sample,))
+        rows = conn.execute(
+            "SELECT id, distance FROM t WHERE e MATCH ? "
+            "ORDER BY distance LIMIT 1",
+            (sample,),
+        ).fetchall()
+        # Sanity: kNN must return our one row at distance 0.
+        if not rows or rows[0][0] != 1:
+            return False
         return True
     except Exception:                                          # noqa: BLE001
         return False

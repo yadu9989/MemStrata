@@ -23,6 +23,13 @@ from memstrata.layer3.ingestion.progress import (
     ControlState,
     build_snapshot,
 )
+
+# Whole file requires sqlite-vec — TestOrchestratorPauseFlag and TestSoftPause
+# both run BackfillOrchestrator which embeds into code_chunks_vec. When
+# sqlite-vec is unavailable the embed phase no-ops and the pause/cancel/
+# resource-policy assertions all fail because the phase boundaries are
+# never reached. Skip the file cleanly.
+pytestmark = pytest.mark.requires_sqlite_vec
 from memstrata.layer3.ingestion.resource_policy import BatteryState
 
 # ── ETA / snapshot math ───────────────────────────────────────────────
