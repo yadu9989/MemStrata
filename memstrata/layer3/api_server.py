@@ -969,6 +969,130 @@ _INJECTION_PER_FILE_BUDGET  = 1000   # cap any single file's contribution so the
                                      # block holds several files, not just one big one
 
 
+def _build_injection_block_from_code_chunks(
+    conn: sqlite3.Connection,
+    project_id: str,
+) -> dict | None:
+    """V5.2-A schema fallback for _build_injection_block.
+
+    The watcher writes `code_chunks` rows shaped:
+      (project_id, file_path, line_start, line_end, text, token_estimate)
+    We aggregate by file_path, apply the same docs-first / token-budget
+    selection policy as the legacy path, then concatenate the chunks
+    (ordered by line_start) into the same wire-shape dict the harness
+    consumes. Returns None when there are no rows for this project so
+    the caller can fall through to the empty-stub.
+    """
+    files = conn.execute(
+        """
+        SELECT file_path,
+               COALESCE(SUM(token_estimate), 0) AS n_tokens,
+               COUNT(*) AS n_chunks
+          FROM code_chunks
+         WHERE project_id = ?
+         GROUP BY file_path
+        """,
+        (project_id,),
+    ).fetchall()
+    if not files:
+        return None
+
+    raw_codebase_tokens = sum(int(r["n_tokens"] or 0) for r in files)
+    n_files = len(files)
+
+    def _is_docs(path: str) -> bool:
+        p = path.lower()
+        return p.endswith((".md", ".rst", ".txt"))
+
+    docs = sorted(
+        (r for r in files if _is_docs(r["file_path"])),
+        key=lambda r: (-int(r["n_tokens"] or 0), r["file_path"]),
+    )[:20]
+    src = sorted(
+        (r for r in files if not _is_docs(r["file_path"])),
+        key=lambda r: (-int(r["n_tokens"] or 0), r["file_path"]),
+    )[:40]
+
+    selected: list[tuple[str, int]] = []  # (path, effective_tokens)
+    docs_used = 0
+    total_used = 0
+    for r in docs:
+        eff = min(int(r["n_tokens"] or 0), _INJECTION_PER_FILE_BUDGET)
+        if docs_used + eff > _INJECTION_DOCS_BUDGET:
+            continue
+        if total_used + eff > _INJECTION_TOKEN_BUDGET:
+            continue
+        selected.append((r["file_path"], eff))
+        docs_used += eff
+        total_used += eff
+    for r in src:
+        eff = min(int(r["n_tokens"] or 0), _INJECTION_PER_FILE_BUDGET)
+        if total_used + eff > _INJECTION_TOKEN_BUDGET:
+            continue
+        selected.append((r["file_path"], eff))
+        total_used += eff
+
+    if not selected:
+        return {
+            "block_text": "",
+            "block_hash": "empty",
+            "block_built_at": datetime.now(timezone.utc).isoformat(),
+            "token_count": 0,
+            "expiry_hint_s": 60,
+            "raw_codebase_tokens": raw_codebase_tokens or None,
+        }
+
+    parts: list[str] = [
+        f"# Project context: {project_id}",
+        f"# Files included: {len(selected)} of {n_files} (~{total_used} tokens)",
+        "",
+    ]
+    hash_components: list[str] = [project_id]
+    for path, eff_tokens in selected:
+        chunks = conn.execute(
+            """
+            SELECT text, token_estimate, line_start, stable_hash
+              FROM code_chunks
+             WHERE project_id = ? AND file_path = ?
+             ORDER BY line_start
+            """,
+            (project_id, path),
+        ).fetchall()
+        if not chunks:
+            continue
+        parts.append(f"<file path=\"{path}\">")
+        used = 0
+        truncated = False
+        for ch in chunks:
+            tc = int(ch["token_estimate"] or 1)
+            if used + tc > eff_tokens and used > 0:
+                truncated = True
+                break
+            parts.append(ch["text"] or "")
+            used += tc
+            hash_components.append(str(ch["stable_hash"]))
+        if truncated:
+            parts.append("# ... (file truncated to fit context budget)")
+        parts.append("</file>")
+        parts.append("")
+
+    block_text = "\n".join(parts).rstrip() + "\n"
+    # Deterministic hash so the harness's prefix-cache holds across turns
+    # whose underlying chunk content hasn't changed.
+    block_hash = hashlib.sha1(
+        "|".join(hash_components).encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()
+    return {
+        "block_text": block_text,
+        "block_hash": block_hash,
+        "block_built_at": datetime.now(timezone.utc).isoformat(),
+        "token_count": total_used,
+        "expiry_hint_s": 3600,
+        "raw_codebase_tokens": raw_codebase_tokens or None,
+    }
+
+
 def _build_injection_block(
     conn: sqlite3.Connection,
     project_id: str,
@@ -977,6 +1101,14 @@ def _build_injection_block(
 
     Returns the harness's expected dict shape. When the project has no
     ingested files, returns the empty-stub shape (preserves V5.1 behavior).
+
+    Schema-fallback path: the V5.1 `memstrata ingest` CLI populates
+    `codebase_files` + `codebase_chunks`. The V5.2-A IngestionService
+    watcher (auto-triggered by /projects/register) populates
+    `code_chunks` + `file_hashes` instead. When the legacy tables are
+    empty but the new schema has content for this project_id, we serve
+    the block off the watcher tables. This is what closes the wiring
+    gap between auto-opt-in and live context injection.
     """
     total_row = conn.execute(
         """
@@ -989,6 +1121,10 @@ def _build_injection_block(
     raw_codebase_tokens = int(total_row["n_tokens"] or 0)
 
     if n_files == 0:
+        # Fall back to the V5.2-A watcher schema before returning empty.
+        fallback = _build_injection_block_from_code_chunks(conn, project_id)
+        if fallback is not None:
+            return fallback
         return {
             "block_text": "",
             "block_hash": "empty",
